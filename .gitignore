@@ -19,6 +19,8 @@ logs/
 crash.log
 startup-error.log
 marcas_store/
+# Herramientas y resultados locales para inspeccionar la interfaz
+capturar-ui.sh
 capturas/
 media/
 
