@@ -90,7 +90,7 @@ if (-not (Test-Path $uv)) {
 
 # 2. Python administrado por uv y entorno bootstrap sin dependencias pesadas.
 Write-Host "[2/8] Preparando Python 3.13 y bootstrap..." -ForegroundColor Yellow
-& $uv python install 3.13
+& $uv python install 3.13 --no-bin
 Assert-Ok "No se pudo instalar Python 3.13"
 $bootstrap = Join-Path $PSScriptRoot ".bootstrap"
 $bootstrapPython = Join-Path $bootstrap "Scripts\python.exe"

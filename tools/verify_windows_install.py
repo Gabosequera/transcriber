@@ -72,16 +72,25 @@ def verify(root: Path) -> None:
     environment = dict(os.environ)
     environment["TRANSCRIPTOR_ROOT"] = str(root)
     environment["TRANSCRIPTOR_RELEASE_VERSION"] = version
+    environment["PATH"] = str(ffmpeg.parent) + os.pathsep + environment.get("PATH", "")
+    torch_contract = manifest.get("runtime", {}).get("torch", {})
+    expected_torch = str(torch_contract.get("version") or "")
+    expected_cuda = "12.8" if str(torch_contract.get("index_url") or "").endswith("/cu128") else ""
+    if not expected_torch or not expected_cuda:
+        raise RuntimeError("el contrato Torch/CUDA de la release no es válido")
     import_code = (
         "import importlib, sys; "
         f"sys.path.insert(0, {str(release)!r}); "
         f"mods={REQUIRED_IMPORTS!r}; "
         "[importlib.import_module(name) for name in mods]; "
+        "import torch; "
+        f"assert torch.__version__.split('+')[0] == {expected_torch!r}, torch.__version__; "
+        f"assert torch.version.cuda == {expected_cuda!r}, torch.version.cuda; "
         "import app_paths, core, hardware, updater; "
         "print('Imports Windows OK')"
     )
     subprocess.run(
-        [str(runtime_python), "-c", import_code],
+        [str(runtime_python), "-W", "ignore::SyntaxWarning", "-c", import_code],
         cwd=release,
         env=environment,
         check=True,
