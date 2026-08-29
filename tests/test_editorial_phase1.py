@@ -342,9 +342,10 @@ class PipelineIntegrationTests(unittest.TestCase):
                 mock.patch("prosodia.extract_word_intensity", return_value=intensity),
                 mock.patch("laughter.detect", return_value=[]),
                 mock.patch("codex_chunker.plan", side_effect=chunk_with_codex),
+                mock.patch("editorial_pipeline._preflight", return_value=None),
             )
             with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
-                    patches[6], patches[7], patches[8]:
+                    patches[6], patches[7], patches[8], patches[9]:
                 spec = {"source": str(source), "project_dir": str(project),
                         "tracks": [{"stream_index": 0, "label": "Gabriel"}]}
                 first = editorial_pipeline.run(spec, cancel=threading.Event())
