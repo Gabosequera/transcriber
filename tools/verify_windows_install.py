@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verifica una instalación administrada de Transcriptor sin abrir la interfaz."""
+"""Verifica una instalación administrada de Transcriptor, incluida su interfaz."""
 from __future__ import annotations
 
 import argparse
@@ -72,6 +72,7 @@ def verify(root: Path) -> None:
     environment = dict(os.environ)
     environment["TRANSCRIPTOR_ROOT"] = str(root)
     environment["TRANSCRIPTOR_RELEASE_VERSION"] = version
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     environment["PATH"] = str(ffmpeg.parent) + os.pathsep + environment.get("PATH", "")
     torch_contract = manifest.get("runtime", {}).get("torch", {})
     expected_torch = str(torch_contract.get("version") or "")
@@ -91,10 +92,15 @@ def verify(root: Path) -> None:
         "window.update_idletasks(); "
         "window.update(); "
         "window.destroy(); "
+        f"updater.verify_installed_release(Path({str(release)!r}), {version!r}); "
         "print('Interfaz Windows OK')"
     )
+    command = [
+        str(runtime_python), "-B", "-W", "ignore::SyntaxWarning", "-c",
+        "from pathlib import Path; " + import_code,
+    ]
     subprocess.run(
-        [str(runtime_python), "-W", "ignore::SyntaxWarning", "-c", import_code],
+        command,
         cwd=release,
         env=environment,
         check=True,

@@ -335,13 +335,79 @@ def verify_installed_release(directory: Path, expected_version: str,
         path.relative_to(directory).as_posix()
         for path in directory.rglob("*") if path.is_file()
     }
-    if actual != set(expected) | {"release-manifest.json"}:
-        raise UpdateError("la release instalada contiene archivos ausentes o no declarados")
+    declared = set(expected) | {"release-manifest.json"}
+    if actual != declared:
+        missing = sorted(declared - actual)
+        unexpected = sorted(actual - declared)
+
+        def summary(label: str, paths: list[str]) -> str | None:
+            if not paths:
+                return None
+            visible = ", ".join(paths[:3])
+            suffix = f" (+{len(paths) - 3})" if len(paths) > 3 else ""
+            return f"{label}: {visible}{suffix}"
+
+        details = filter(None, (
+            summary("faltan", missing),
+            summary("sobran", unexpected),
+        ))
+        raise UpdateError(
+            "la release instalada no coincide con su manifiesto (" + "; ".join(details) + ")"
+        )
     for relative, item in expected.items():
         path = directory.joinpath(*PurePosixPath(relative).parts)
         if path.stat().st_size != item["size"] or sha256_file(path) != item["sha256"]:
             raise UpdateError(f"la release instalada está corrupta: {relative}")
     return manifest
+
+
+def _extract_release_to_staging(root: Path, archive: Path, *, version: str,
+                                release_manifest_sha256: str) -> tuple[Path, dict]:
+    stage_parent = root / "updates" / "staging"
+    stage_parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=f"{version}-", dir=stage_parent))
+    shutil.rmtree(stage)
+    try:
+        manifest = extract_verified_archive(
+            archive,
+            stage,
+            version=version,
+            release_manifest_sha256=release_manifest_sha256,
+        )
+        return stage, manifest
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _replace_release_atomically(final: Path, stage: Path) -> None:
+    """Activa una copia verificada y restaura la anterior si el intercambio falla."""
+    final.parent.mkdir(parents=True, exist_ok=True)
+    if not final.exists():
+        os.replace(stage, final)
+        return
+
+    backup_parent = final.parents[1] / "updates" / "staging"
+    backup = backup_parent / f".{final.name}.{os.getpid()}.replaced"
+    if backup.exists():
+        _remove_path(backup)
+    os.replace(final, backup)
+    try:
+        os.replace(stage, final)
+    except Exception:
+        os.replace(backup, final)
+        raise
+    try:
+        _remove_path(backup)
+    except OSError:
+        pass
 
 
 def extract_verified_archive(archive: Path, destination: Path, *, version: str,
@@ -524,22 +590,26 @@ def install_bundle(root: Path, update_manifest: dict, archive: Path, *,
     root = root.resolve()
     with update_lock(root):
         final = root / "releases" / version
+        manifest = None
         if final.exists():
-            manifest = verify_installed_release(final, version, internal_hash)
-        else:
-            stage_parent = root / "updates" / "staging"
-            stage_parent.mkdir(parents=True, exist_ok=True)
-            stage = Path(tempfile.mkdtemp(prefix=f"{version}-", dir=stage_parent))
-            shutil.rmtree(stage)
-            _progress(progress, "Verificando archivos de la release")
             try:
-                manifest = extract_verified_archive(
-                    archive, stage, version=version, release_manifest_sha256=internal_hash,
+                manifest = verify_installed_release(final, version, internal_hash)
+            except UpdateError:
+                _progress(progress, "Reparando archivos de la release")
+        if manifest is None:
+            _progress(progress, "Verificando archivos de la release")
+            stage = None
+            try:
+                stage, manifest = _extract_release_to_staging(
+                    root,
+                    archive,
+                    version=version,
+                    release_manifest_sha256=internal_hash,
                 )
-                final.parent.mkdir(parents=True, exist_ok=True)
-                os.replace(stage, final)
+                _replace_release_atomically(final, stage)
             except Exception:
-                shutil.rmtree(stage, ignore_errors=True)
+                if stage is not None:
+                    shutil.rmtree(stage, ignore_errors=True)
                 raise
         runtime_dir = None
         if prepare_runtime:

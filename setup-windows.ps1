@@ -111,7 +111,7 @@ Assert-Ok "No se pudo construir la release local"
 $archive = Join-Path $bundleDir "transcriptor-windows-v$version.zip"
 $manifest = Join-Path $bundleDir "transcriptor-update-v$version.json"
 
-# 4. Instalar la release y su runtime por hash. Si ya existe, se reutiliza completo.
+# 4. Instalar la release y su runtime por hash. Si existe y esta integra, se reutiliza.
 Write-Host "[4/8] Instalando release y runtime verificado..." -ForegroundColor Yellow
 & $bootstrapPython (Join-Path $PSScriptRoot "updater.py") install-bundle `
     --root $PSScriptRoot --manifest $manifest --archive $archive
