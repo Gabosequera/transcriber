@@ -86,8 +86,12 @@ def verify(root: Path) -> None:
         "import torch; "
         f"assert torch.__version__.split('+')[0] == {expected_torch!r}, torch.__version__; "
         f"assert torch.version.cuda == {expected_cuda!r}, torch.version.cuda; "
-        "import app_paths, core, hardware, updater; "
-        "print('Imports Windows OK')"
+        "import app, app_paths, core, hardware, updater; "
+        "window=app.App(); "
+        "window.update_idletasks(); "
+        "window.update(); "
+        "window.destroy(); "
+        "print('Interfaz Windows OK')"
     )
     subprocess.run(
         [str(runtime_python), "-W", "ignore::SyntaxWarning", "-c", import_code],
