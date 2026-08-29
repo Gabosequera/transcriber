@@ -1,0 +1,55 @@
+# ============================================================================
+# Requisitos para WINDOWS (PC con GPU NVIDIA).
+#
+# Diferencia clave vs. requirements.txt (la laptop Linux de desarrollo):
+#   - torch / torchaudio van en build CUDA (NO +cpu) -> asi los modelos de IA
+#     (alineacion, emocion, risa, escenas, respiraciones) corren en la GPU.
+#   - el resto de los paquetes tienen wheels de Windows y NO cambian.
+#
+# Los MODELOS (pesos) no van aca: se bajan solos la primera vez que se usa cada
+# funcion (faster-whisper, HuggingFace y llama.cpp los descargan al vuelo).
+#
+# ---------------------------------------------------------------------------
+# INSTALACION: setup-windows.bat crea runtimes/<hash>. El hash incorpora este archivo,
+# Python, Torch y su indice CUDA. El updater reutiliza el runtime mientras ese contrato
+# no cambie; los modelos viven aparte en shared y nunca forman parte del runtime.
+# ============================================================================
+
+ctranslate2==4.8.1
+customtkinter==6.0.0
+faster-whisper==1.2.1
+numpy==2.4.6
+nvidia-cublas-cu12==12.9.2.10     # para Whisper en GPU (CTranslate2) - wheel de Windows
+nvidia-cudnn-cu12==9.24.0.43      #   idem
+silero-vad==6.2.1
+soundfile==0.14.0
+psutil==7.2.2                     # deteccion de hardware (pestana Ajustes)
+librosa==0.11.0
+intervaltree==3.2.1
+transformers>=4.48,<5             # <5 obligatorio: el modelo de audeering rompe con 5.x
+pysentimiento==0.7.3
+pydub==0.25.1
+
+# torch / torchaudio: NO se ponen aca - se instalan en el PASO 1 con el indice
+# CUDA (arriba), para no fijar una version que no matchee el indice del sistema.
+
+# --- modalidad de VIDEO (cara / facecam) ---
+mediapipe                 # Face Landmarker; runtime propio (tflite) -> no choca con torch/cuDNN
+# emociones faciales (EmotiEffLib, ONNX/CPU -> no toca el carril cuDNN de Windows).
+# OJO: emotiefflib se instala aparte y SIN deps (pide opencv-python, pero cv2 ya lo
+# provee opencv-contrib-python via mediapipe; los dos juntos = conflicto de cv2).
+# setup-windows.ps1 ya lo hace; a mano seria el PASO 3:
+#   .venv\Scripts\python -m pip install --no-deps emotiefflib
+onnx                      # dep de emotiefflib (separa el clasificador del backbone;
+                          # onnxruntime ya viene con faster-whisper)
+# (el modelo enet_b0_8_va_mtl.onnx ~16MB se auto-descarga a ~/.emotiefflib al 1er uso)
+
+# el wizard «Extraer metadata» dibuja el preview del video con Pillow. OJO: customtkinter
+# NO lo trae (solo requiere darkdetect+packaging); en Linux llegaba transitivo por
+# emotiefflib/matplotlib, pero en Windows emotiefflib va --no-deps, asi que sin esta
+# linea el venv queda SIN PIL (crash del wizard/preview, visto 2026-07-20).
+pillow
+
+# visión por VLM (vision.py llama a OpenRouter): requests llegaba transitivo por
+# huggingface_hub — se fija EXPLICITO porque ahora es dependencia de primera clase
+requests

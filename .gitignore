@@ -1,0 +1,44 @@
+.venv/
+.bootstrap/
+__pycache__/
+*.py[cod]
+.state/
+dist/
+releases/
+runtimes/
+shared/
+updates/
+
+# Estado y datos por maquina
+config.json
+presets.json
+wizard_fuentes.json
+marcar_fuentes.json
+pipeline.history.json
+logs/
+crash.log
+startup-error.log
+marcas_store/
+capturas/
+media/
+
+# Pesos y componentes descargables
+models/
+llama/
+tools/uv.exe
+LaughterSegmentation/
+Respiro-en/
+*.gguf
+*.onnx
+*.safetensors
+*.pt
+
+# Paquetes generados historicos
+ship-windows-*.zip
+transcriber-win.zip
+
+# Archivo histórico de diseño/revisiones; no forma parte del producto ni del release
+three-brain-out/
+docs-archivo/
+SHIP-README.txt
+skill-clipear-export.md

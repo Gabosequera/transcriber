@@ -1,0 +1,45 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+ctranslate2==4.8.1
+customtkinter==6.0.0
+faster-whisper==1.2.1
+numpy==2.4.6
+nvidia-cublas-cu12==12.9.2.10
+nvidia-cudnn-cu12==9.24.0.43
+silero-vad==6.2.1
+soundfile==0.14.0
+psutil==7.2.2             # detección de hardware (RAM/CPU) para la pestaña Ajustes
+torch==2.13.0+cpu
+torchaudio==2.11.0+cpu
+# modo quirúrgico (Respiro-en): red de detección de respiraciones
+librosa==0.11.0
+intervaltree==3.2.1
+# nota: además clonar el repo del modelo dentro del proyecto:
+#   git clone https://github.com/ydqmkkx/Respiro-en.git
+# (numpy quedó en 2.4.6: numba/librosa aún no admiten 2.5.x)
+# pestaña Metadata (emoción): arousal del audio (audeering) + valence del texto (pysentimiento)
+transformers>=4.48,<5     # IMPORTANTE <5: el modelo custom de audeering rompe con transformers 5.x
+pysentimiento==0.7.3
+# pestaña Metadata (risa): omine-me/LaughterSegmentation — wav2vec2 vía transformers (ya arriba)
+pydub==0.25.1             # preproceso del detector de risa
+# además clonar el repo del detector de risa (el modelo se baja solo de HF la 1ª vez, ~1.26GB):
+#   git clone https://github.com/omine-me/LaughterSegmentation.git
+# no tocan el core (whisper usa ctranslate2, no transformers); torch/numpy quedan igual
+
+# --- modalidad de VIDEO (cara / facecam) ---
+mediapipe                 # Face Landmarker (blendshapes + pose de cabeza); runtime propio (tflite), no toca torch/numpy
+# emociones faciales (EmotiEffLib, ONNX/CPU): valence/arousal + 8 clases AffectNet.
+# OJO: instalar SIN deps — emotiefflib pide opencv-python, pero cv2 ya lo provee
+# opencv-contrib-python (lo trae mediapipe); instalar los dos = conflicto de paquete cv2.
+# onnxruntime ya viene con faster-whisper. Solo falta `onnx` (abajo) y la lib:
+#   pip install --no-deps emotiefflib
+onnx                      # emotiefflib lo usa para separar el clasificador del backbone
+# (el modelo enet_b0_8_va_mtl.onnx ~16MB se auto-descarga a ~/.emotiefflib al primer uso)
+
+# el wizard «Extraer metadata» dibuja el preview del video con Pillow. OJO: customtkinter
+# NO lo trae (solo requiere darkdetect+packaging); aquí llega transitivo por
+# emotiefflib/matplotlib, pero se fija EXPLÍCITO (en Windows emotiefflib va --no-deps)
+pillow
+
+# visión por VLM (vision.py llama a OpenRouter): requests llegaba transitivo por
+# huggingface_hub — se fija EXPLICITO porque ahora es dependencia de primera clase
+requests

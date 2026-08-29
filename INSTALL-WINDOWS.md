@@ -1,0 +1,83 @@
+# Instalar y actualizar Transcriptor en Windows
+
+## Primera instalación
+
+1. Descarga `transcriptor-installer-vX.Y.Z.zip` desde la release estable más reciente.
+2. Extrae el ZIP en una carpeta permanente, por ejemplo `C:\Transcriptor`.
+3. Ejecuta `setup-windows.bat` una sola vez.
+4. Abre la aplicación con `run.bat`.
+
+No hace falta instalar Python, Git, ffmpeg ni permisos de administrador. El instalador
+descarga `uv`, crea un Python bootstrap pequeño y prepara el runtime de procesamiento.
+
+## Layout administrado
+
+```text
+Transcriptor\
+├── .bootstrap\              launcher; no contiene modelos
+├── releases\0.1.0\         código inmutable de cada versión
+├── runtimes\<hash>\        Python y dependencias por lock
+├── shared\
+│   ├── cache\               Hugging Face, Torch y uv
+│   ├── components\          LaughterSegmentation y Respiro-en
+│   ├── config\              configuración y presets por máquina
+│   ├── llama\               binarios de llama.cpp
+│   ├── models\              GGUF y MediaPipe
+│   └── tools\               uv y ffmpeg
+├── state\current.json       release activa, anterior y estado de salud
+└── run.bat
+```
+
+Actualizar código no modifica `shared`. Si las dependencias no cambian, tampoco se crea
+otro runtime. Cuando cambian, se instala un runtime nuevo y el anterior queda disponible
+para rollback; los pesos de los modelos continúan en el mismo caché compartido.
+
+## Configurar GitHub
+
+El repositorio se fija una vez en `update-channel.json`:
+
+```powershell
+.\configurar-github.ps1 owner/repositorio
+```
+
+También puede ejecutarse `configurar-github.bat` y escribir `owner/repositorio`. Por
+defecto se esperan releases públicas. Un repositorio privado requiere proporcionar el
+token únicamente mediante `TRANSCRIPTOR_GITHUB_TOKEN`; la app nunca lo escribe a disco.
+
+## Actualizaciones automáticas
+
+Al arrancar, el launcher consulta la release estable más reciente de GitHub. Si existe
+una versión superior:
+
+1. descarga el manifiesto y el ZIP a `updates\`;
+2. valida versión, plataforma, tamaño, SHA-256 y la lista exacta de archivos;
+3. rechaza rutas inseguras, enlaces y contenido no declarado;
+4. extrae a staging y prepara el runtime sólo si cambió su hash;
+5. cambia atómicamente la release activa;
+6. espera una confirmación de salud de la nueva interfaz;
+7. vuelve a la release anterior si el arranque falla.
+
+Sin conexión o ante cualquier error de GitHub se abre la versión ya instalada. Nunca se
+borra o reemplaza una release funcional para aplicar una actualización.
+
+## Publicar una release
+
+1. Actualiza `VERSION`, por ejemplo a `0.2.0`.
+2. Ejecuta las pruebas.
+3. Crea y sube el tag correspondiente: `v0.2.0`.
+4. `.github/workflows/release.yml` valida el tag, construye los assets y crea la release.
+
+Assets producidos:
+
+- `transcriptor-windows-vX.Y.Z.zip`: código consumido por el updater;
+- `transcriptor-update-vX.Y.Z.json`: hash y contrato de instalación;
+- `transcriptor-installer-vX.Y.Z.zip`: paquete para una computadora nueva.
+
+El repositorio debe habilitar protección de tags y, si está disponible en sus ajustes,
+releases inmutables. Nunca se debe reemplazar el contenido de un tag publicado: cualquier
+cambio produce una versión nueva.
+
+## Diagnóstico
+
+`diagnostico.bat` deja la consola visible. Los demás registros están en `shared\logs` y
+el estado del updater en `state\update-status.json`.
