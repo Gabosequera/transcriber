@@ -283,7 +283,7 @@ def _validate_release_manifest(manifest: dict, expected_version: str) -> dict[st
     index_url = str(torch.get("index_url") or "")
     if not re.fullmatch(r"\d+\.\d+\.\d+", torch_version):
         raise UpdateError("versión de Torch inválida")
-    if index_url not in {"https://download.pytorch.org/whl/cu124"}:
+    if index_url not in {"https://download.pytorch.org/whl/cu128"}:
         raise UpdateError("índice de Torch no autorizado")
     runtime_material = b"\0".join([
         b"python=3.13", f"torch={torch_version}".encode(), index_url.encode(),

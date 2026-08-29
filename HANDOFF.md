@@ -215,7 +215,8 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   confirmar su arranque con un nonce; si falla, vuelve a la anterior.
 - Un cambio de código reutiliza el runtime. Un cambio de dependencias crea otro runtime,
   pero jamás vuelve a descargar pesos presentes en `shared/cache` o `shared/models`.
-- torch quedó en 2.6.0+cu124 (el pin 2.13 no existe en cu124).
+- El runtime Windows usa torch/torchaudio 2.9.1 con CUDA 12.8: soporta las RTX
+  3050/4070 y añade soporte Blackwell para la RTX 5080.
 - REGLA WINDOWS: los modelos torch corren en CPU (`hardware.use_gpu_torch()` = False
   en nt) — torch y CTranslate2 chocan por cuDNN si comparten GPU (crash nativo
   diagnosticado). Whisper sí usa GPU (carril CTranslate2 independiente). Flag
@@ -223,8 +224,8 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
 - Todos los subprocess van con CREATE_NO_WINDOW + Job Object (`medios._popen` /
   `flags_subprocess` / `popen_gestionado`); os.replace con retry de PermissionError
   (locks de antivirus).
-- El ZIP manual `ship-windows-*` y `SHIP-README.txt` son históricos. No deben usarse
-  para releases nuevas; el workflow vigente está en `.github/workflows/release.yml`.
+- Los antiguos ZIP manuales fueron retirados. El workflow vigente está en
+  `.github/workflows/release.yml` y prueba una instalación Windows completa antes de publicar.
 
 ### Servicios online (OpenRouter + Alibaba)
 - Keys en `config.json` (POR MÁQUINA — jamás en presets/spec/manifests/zip):

@@ -15,7 +15,7 @@ descarga `uv`, crea un Python bootstrap pequeño y prepara el runtime de procesa
 ```text
 Transcriptor\
 ├── .bootstrap\              launcher; no contiene modelos
-├── releases\0.1.0\         código inmutable de cada versión
+├── releases\<versión>\     código inmutable de cada versión
 ├── runtimes\<hash>\        Python y dependencias por lock
 ├── shared\
 │   ├── cache\               Hugging Face, Torch y uv
@@ -76,6 +76,10 @@ Assets producidos:
 El repositorio debe habilitar protección de tags y, si está disponible en sus ajustes,
 releases inmutables. Nunca se debe reemplazar el contenido de un tag publicado: cualquier
 cambio produce una versión nueva.
+
+Antes de publicar, el workflow ejecuta `setup-windows.ps1 -NonInteractive` sobre un
+runner Windows limpio y valida el runtime, sus imports, ffmpeg y el detector de risas.
+La release no se publica si esa instalación integral falla.
 
 ## Diagnóstico
 

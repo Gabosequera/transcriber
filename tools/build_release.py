@@ -23,8 +23,9 @@ INSTALLER_ROOT_FILES = {
     "setup-windows.bat", "setup-windows.ps1", "run.bat", "diagnostico.bat",
     "configurar-github.bat", "configurar-github.ps1",
 }
-TORCH_VERSION = "2.6.0"
-TORCH_INDEX = "https://download.pytorch.org/whl/cu124"
+INSTALLER_TOOL_FILES = {"tools/verify_windows_install.py"}
+TORCH_VERSION = "2.9.1"
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 
 
 def canonical_json(value: dict) -> bytes:
@@ -111,6 +112,11 @@ def build(version: str, output: Path, *, require_repository: bool = False) -> tu
             raise SystemExit(f"falta archivo del instalador: {name}")
         installer_payloads[name] = path.read_bytes()
     installer_payloads["tools/build_release.py"] = Path(__file__).read_bytes()
+    for relative in INSTALLER_TOOL_FILES:
+        path = PROJECT / relative
+        if not path.is_file():
+            raise SystemExit(f"falta herramienta del instalador: {relative}")
+        installer_payloads[relative] = path.read_bytes()
     with zipfile.ZipFile(installer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
         for relative, data in sorted(installer_payloads.items()):
             info = zipfile.ZipInfo(relative, date_time=(2026, 1, 1, 0, 0, 0))

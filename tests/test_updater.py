@@ -14,6 +14,9 @@ import updater
 from tools import build_release
 
 
+PROJECT_VERSION = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+
+
 class VersionAndConfigTests(unittest.TestCase):
     def test_versions_are_strict_and_orderable(self):
         self.assertEqual(updater.parse_version("v1.2.3"), (1, 2, 3))
@@ -38,7 +41,7 @@ class BundleTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
         cls.output = Path(cls.temp.name)
-        cls.archive, cls.manifest_path = build_release.build("0.1.0", cls.output)
+        cls.archive, cls.manifest_path = build_release.build(PROJECT_VERSION, cls.output)
         cls.manifest = json.loads(cls.manifest_path.read_text(encoding="utf-8"))
 
     @classmethod
@@ -53,7 +56,7 @@ class BundleTests(unittest.TestCase):
             )
             release = result["release_dir"]
             self.assertTrue((release / "app.py").is_file())
-            self.assertEqual(release_state.load_current(root)["current"], "0.1.0")
+            self.assertEqual(release_state.load_current(root)["current"], PROJECT_VERSION)
             self.assertFalse(any((root / "updates" / "staging").iterdir()))
 
     def test_release_contains_code_but_no_machine_state_or_models(self):
@@ -64,6 +67,14 @@ class BundleTests(unittest.TestCase):
         self.assertNotIn("config.json", names)
         self.assertFalse(any(name.startswith("models/") for name in names))
         self.assertFalse(any(name.startswith(".venv/") for name in names))
+
+    def test_installer_contains_validation_but_no_local_artifacts(self):
+        installer = self.output / f"transcriptor-installer-v{PROJECT_VERSION}.zip"
+        with zipfile.ZipFile(installer) as bundle:
+            names = set(bundle.namelist())
+        self.assertIn("tools/verify_windows_install.py", names)
+        self.assertNotIn("capturar-ui.sh", names)
+        self.assertFalse(any(name.startswith("capturas/") for name in names))
 
     def test_archive_hash_mismatch_never_activates(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -83,7 +94,7 @@ class BundleTests(unittest.TestCase):
                 bundle.writestr("release-manifest.json", b"{}")
             with self.assertRaises(updater.UpdateError):
                 updater.extract_verified_archive(
-                    archive, root / "release", version="0.1.0",
+                    archive, root / "release", version=PROJECT_VERSION,
                     release_manifest_sha256=hashlib.sha256(b"{}").hexdigest(),
                 )
             self.assertFalse((root / "escape.py").exists())

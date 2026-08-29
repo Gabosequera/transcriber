@@ -77,7 +77,7 @@ editor, y preparar la app para la PC Windows.
   detección CPU/GPU multi-backend + pestaña Ajustes), fallback OOM->CPU en todos los
   módulos torch, audiocache/jobs/models (recursos), portabilidad total del código
   (paths, DLLs, run.bat), instalador automático setup-windows.bat/ps1 (uv + python
-  portable + torch cu124 + ffmpeg + llama vulkan), requirements-windows.txt.
+  portable + torch CUDA 12.8 + ffmpeg + llama vulkan), requirements-windows.txt.
 - En la PC Windows real: instalación OK; crash del alineador diagnosticado =
   conflicto de cuDNN entre CTranslate2 y torch -> REGLA: torch en CPU en Windows
   (whisper sigue en GPU). Fixes de la prueba real: cancelar no pisa datos buenos;
