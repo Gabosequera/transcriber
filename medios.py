@@ -284,7 +284,7 @@ def hash_archivo(path) -> str:
 
 
 # ------------------------------------------------------------------------- extracción --
-def extraer_pista(video, pista: dict, destino, *, mono=False, cancel=None,
+def extraer_pista(video, pista: dict, destino, *, mono=False, sample_rate=None, cancel=None,
                   log_cb=None, progress_cb=None) -> dict:
     """Extrae UNA pista de audio a FLAC, normalizada a la timeline canónica T0:
     Δ = pista['delta']; Δ>0 → silencio antepuesto; Δ<0 → recorte del arranque. Devuelve
@@ -308,6 +308,8 @@ def extraer_pista(video, pista: dict, destino, *, mono=False, cancel=None,
         # -ac 1 = downmix ESTÁNDAR de ffmpeg según el channel layout (incluye el canal
         # CENTRAL de un 5.1 — un pan a mano con FL/FR lo perdería; review ronda 3, h.10)
         cmd += ["-ac", "1"]
+    if sample_rate is not None:
+        cmd += ["-ar", str(int(sample_rate))]
     cmd += ["-c:a", "flac", "-progress", "pipe:1", "-loglevel", "error", str(destino)]
     if log_cb:
         log_cb(f"Extrayendo pista a:{pista['idx']} → {destino.name}"

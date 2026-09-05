@@ -79,6 +79,7 @@ No analices las pistas por separado. Si el archivo es largo, recórrelo sistemá
 en ventanas contiguas y conserva un mapa global; no propongas chunks hasta llegar al final.
 
 La grabación dura {duration:.3f} segundos y contiene {clean_count} intervenciones limpias.
+Cada bloque debe durar como máximo 3000 segundos; busca cierres antes de 45 minutos.
 Debes dividirla semánticamente en exactamente {count} chunks macro que cubran desde
 0.000 hasta {duration:.3f}, sin huecos ni solapes. El texto y la evolución temática mandan.
 Puedes consultar `views/conversation-signals.md` alrededor de límites candidatos para

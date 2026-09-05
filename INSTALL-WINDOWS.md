@@ -85,3 +85,19 @@ La release no se publica si esa instalación integral falla.
 
 `diagnostico.bat` deja la consola visible. Los demás registros están en `shared\logs` y
 el estado del updater en `state\update-status.json`.
+
+## Podcasts y cortes externos
+
+El modo Automático extrae voz y espera el plan de una AI externa; no requiere Codex
+CLI para procesar. La skill se distribuye en `skills/transcriptor/SKILL.md` dentro de
+la release. Consulta el flujo y los archivos en README.md.
+
+Torch y TorchAudio se fijan juntos en 2.8.0 (CUDA 12.8), porque el alineador MMS usa
+`forced_align`, retirado en versiones posteriores. El verificador ejecuta una pequeña
+alineación CTC sin descargar pesos, además de abrir la interfaz. No actualices estos
+paquetes por separado. Referencia: [TorchAudio 2.8](https://docs.pytorch.org/audio/2.8/tutorials/ctc_forced_alignment_api_tutorial.html).
+
+Los cortes se exportan en segundo plano como MP4 H.264/AAC, conservando todas las
+pistas y el original. Usa una carpeta con espacio para los videos recodificados; una
+exportación terminada no se sobrescribe. Para mover proyectos entre máquinas, importa
+el mismo video y abre su master editorial; las rutas antiguas no se usan para exportar.

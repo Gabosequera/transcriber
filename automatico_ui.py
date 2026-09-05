@@ -11,6 +11,8 @@ import customtkinter as ctk
 import dialogs
 import editorial_chunks
 import editorial_pipeline
+import podcast_export
+import medios
 from editorial_io import format_time, parse_time, read_json
 from editor_medios import EditorMedios, LANE_H
 
@@ -29,13 +31,13 @@ MEDIA_FILTERS = [("Audio o video", ["*.mp4", "*.mov", "*.mkv", "*.webm", "*.wav"
 
 
 class ChunkReviewDialog(ctk.CTkToplevel):
-    def __init__(self, parent, master_path: Path, on_saved=None):
+    def __init__(self, parent, master_path: Path, on_saved=None, *, master=None, document=None):
         super().__init__(parent)
         self.master_path = master_path
         self.root_path = master_path.parent
         self.on_saved = on_saved
-        self.master = read_json(master_path)
-        self.document = read_json(self.root_path / "views" / "chunks.json")
+        self.editorial_master = master if master is not None else read_json(master_path)
+        self.document = document if document is not None else read_json(self.root_path / "views" / "chunks.json")
         self.rows: list[dict] = []
         self.title("Revisar chunks")
         self.geometry("920x520")
@@ -65,26 +67,35 @@ class ChunkReviewDialog(ctk.CTkToplevel):
                          font=ctk.CTkFont(size=10, weight="bold")).grid(
                              row=0, column=column, sticky="w", padx=8, pady=(8, 5))
         for index, chunk in enumerate(self.document["chunks"], 1):
+            grid_row = index * 2 - 1
             ctk.CTkLabel(body, text=chunk["chunk_id"], text_color=TEXT).grid(
-                row=index, column=0, sticky="w", padx=8, pady=6)
+                row=grid_row, column=0, sticky="w", padx=8, pady=6)
             title = ctk.CTkEntry(body)
             title.insert(0, chunk["title"])
-            title.grid(row=index, column=1, sticky="ew", padx=8, pady=6)
+            title.grid(row=grid_row, column=1, sticky="ew", padx=8, pady=6)
             start = ctk.CTkEntry(body, width=128)
             start.insert(0, format_time(chunk["t_ini"]))
-            start.grid(row=index, column=2, padx=8, pady=6)
+            start.grid(row=grid_row, column=2, padx=8, pady=6)
             end = ctk.CTkEntry(body, width=128)
             end.insert(0, format_time(chunk["t_fin"]))
-            end.grid(row=index, column=3, padx=8, pady=6)
+            end.grid(row=grid_row, column=3, padx=8, pady=6)
             confidence = ctk.CTkEntry(body, width=72)
             confidence.insert(0, str(chunk.get("confidence", 0.0)))
-            confidence.grid(row=index, column=4, padx=8, pady=6)
+            confidence.grid(row=grid_row, column=4, padx=8, pady=6)
             if index == 1:
                 start.configure(state="disabled")
             if index == len(self.document["chunks"]):
                 end.configure(state="disabled")
             self.rows.append({"title": title, "start": start, "end": end,
                               "confidence": confidence})
+
+            explanation = " · ".join(filter(None, (chunk.get("summary"),
+                chunk.get("end_reason"), " / ".join(chunk.get("warnings") or []))))
+            if explanation:
+                ctk.CTkLabel(body, text=explanation, text_color=MUTED, wraplength=780,
+                             anchor="w", justify="left").grid(
+                                 row=grid_row + 1, column=0, columnspan=5,
+                                 sticky="ew", padx=8, pady=(0, 8))
 
         footer = ctk.CTkFrame(self, fg_color="transparent")
         footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(8, 16))
@@ -93,8 +104,9 @@ class ChunkReviewDialog(ctk.CTkToplevel):
         self.status.grid(row=0, column=0, sticky="w")
         ctk.CTkButton(footer, text="Cancelar", width=92, fg_color=SURFACE_RAISED,
                       hover_color="#2a322d", command=self.destroy).grid(row=0, column=1, padx=6)
-        ctk.CTkButton(footer, text="Guardar límites", width=132, fg_color=ACCENT,
-                      hover_color=ACCENT_HOVER, command=self._save).grid(row=0, column=2, padx=(6, 0))
+        self.save_button = ctk.CTkButton(footer, text="Guardar límites", width=132, fg_color=ACCENT,
+                                         hover_color=ACCENT_HOVER, command=self._save)
+        self.save_button.grid(row=0, column=2, padx=(6, 0))
         self.transient(parent.winfo_toplevel())
         self.grab_set()
 
@@ -102,7 +114,7 @@ class ChunkReviewDialog(ctk.CTkToplevel):
         try:
             chunks = []
             previous_end = 0.0
-            duration = float(self.master["media"]["duration"])
+            duration = float(self.editorial_master["media"]["duration"])
             for index, (chunk, row) in enumerate(zip(self.document["chunks"], self.rows)):
                 start = 0.0 if index == 0 else parse_time(row["start"].get())
                 end = duration if index == len(self.rows) - 1 else parse_time(row["end"].get())
@@ -114,16 +126,37 @@ class ChunkReviewDialog(ctk.CTkToplevel):
                 chunks.append(copy)
                 previous_end = end
             document = {**self.document, "planner": "manual-review", "chunks": chunks}
-            document = editorial_chunks.snap_plan_to_safe_boundaries(
-                document, self.master)
-            editorial_chunks.apply_plan(self.root_path, self.master_path, document,
-                                         persist_selection=True)
         except Exception as error:
             self.status.configure(text=str(error))
             return
-        if self.on_saved:
-            self.on_saved()
-        self.destroy()
+        self.save_button.configure(state="disabled")
+        self.status.configure(text="Validando y guardando…")
+        result = queue.Queue()
+        def work():
+            try:
+                with editorial_pipeline._RunLock(self.root_path / ".work"):
+                    current_master = read_json(self.master_path)
+                    saved = editorial_chunks.snap_plan_to_safe_boundaries(document, current_master)
+                    editorial_chunks.apply_plan(self.root_path, self.master_path, saved,
+                                                 persist_selection=True)
+                result.put(None)
+            except Exception as error:
+                result.put(str(error))
+        def poll():
+            try:
+                error = result.get_nowait()
+            except queue.Empty:
+                self.after(100, poll)
+                return
+            if error:
+                self.status.configure(text=error)
+                self.save_button.configure(state="normal")
+            else:
+                if self.on_saved:
+                    self.on_saved()
+                self.destroy()
+        threading.Thread(target=work, daemon=True).start()
+        self.after(100, poll)
 
 
 class AutomaticWorkspace:
@@ -137,6 +170,10 @@ class AutomaticWorkspace:
         self.cancel = threading.Event()
         self.worker: threading.Thread | None = None
         self.result: dict | None = None
+        self.plan: dict | None = None
+        self._last_plan_stamp = None
+        self._poll_counter = 0
+        self.review_dialog = None
 
         self.f = ctk.CTkFrame(parent, fg_color=BG, corner_radius=0)
         self.f.grid_columnconfigure(0, weight=1)
@@ -170,7 +207,8 @@ class AutomaticWorkspace:
 
         self.editor = EditorMedios(body, ancho_ctl=390,
                                    controles_pista_extra=self._build_track_controls,
-                                   on_video_cargado=self._on_media_loaded)
+                                   on_video_cargado=self._on_media_loaded,
+                                   carriles_extra=self._cut_lanes)
         self.editor.f.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
 
         panel = ctk.CTkFrame(body, width=292, fg_color=SURFACE, corner_radius=10,
@@ -188,7 +226,7 @@ class AutomaticWorkspace:
 
         self.stage_labels = {}
         stages = (("extract", "Preparar pistas"), ("transcribe", "Whisper + MMS"),
-                  ("signals", "Risa + prosodia"), ("master", "Master + Codex"))
+                  ("signals", "Risa + intensidad + emoción"), ("master", "Metadata para AI externa"))
         for row, (key, label) in enumerate(stages, 2):
             line = ctk.CTkFrame(panel, fg_color="transparent")
             line.grid(row=row, column=0, sticky="ew", padx=14, pady=2)
@@ -227,11 +265,19 @@ class AutomaticWorkspace:
                                           state="disabled", fg_color=SURFACE_RAISED,
                                           hover_color="#2a322d", command=self._import_agent_chunks)
         self.agent_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.accept_button = ctk.CTkButton(panel, text="Aceptar y exportar cortes", height=32,
+                                           state="disabled", fg_color=ACCENT,
+                                           command=self._accept_cuts)
+        self.accept_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.open_project_button = ctk.CTkButton(panel, text="Abrir proyecto existente", height=28,
+                                                fg_color=SURFACE_RAISED,
+                                                command=self._open_project)
+        self.open_project_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.run_button = ctk.CTkButton(panel, text="Procesar pistas de voz", height=38,
                                         state="disabled", fg_color=ACCENT,
                                         hover_color=ACCENT_HOVER, command=self._run_or_cancel,
                                         font=ctk.CTkFont(size=13, weight="bold"))
-        self.run_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 14))
+        self.run_button.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 14))
 
     def _build_track_controls(self, row, track, index):
         selected = ctk.CTkCheckBox(row, text="VOZ", width=54, height=26)
@@ -260,6 +306,8 @@ class AutomaticWorkspace:
     def _on_media_loaded(self, info, fingerprint):
         self.info, self.fingerprint = info, fingerprint
         self.result = None
+        self.plan = None
+        self._last_plan_stamp = None
         self.track_widgets = []
         source = Path(info["path"])
         self.project_title.configure(text=source.stem)
@@ -269,7 +317,7 @@ class AutomaticWorkspace:
         self.output_entry.insert(0, str(default))
         self.pipeline_title.configure(text="Selecciona las pistas de voz")
         self.run_button.configure(state="normal")
-        for button in (self.view_button, self.chunks_button, self.agent_button):
+        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button):
             button.configure(state="disabled")
 
     def _selected_tracks(self) -> list[dict]:
@@ -285,6 +333,11 @@ class AutomaticWorkspace:
         state = "disabled" if active else "normal"
         self.import_button.configure(state=state)
         self.output_entry.configure(state=state)
+        self.open_project_button.configure(state=state)
+        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button):
+            button.configure(state="disabled")
+        if not active:
+            self._refresh_plan_buttons()
         for widget in self.track_widgets:
             widget["selected"].configure(state=state)
             widget["label"].configure(state=state)
@@ -306,11 +359,15 @@ class AutomaticWorkspace:
             messagebox.showwarning("Falta la salida", "Elige una carpeta para el proyecto.")
             return
         spec = {"source": self.info["path"], "project_dir": project_dir,
-                "project_name": Path(self.info["path"]).stem, "tracks": tracks,
-                "transcription": {"model": "medium", "language": "es", "device": "auto"}}
+                "project_name": (Path(self.result["master"]).name.removesuffix(".editorial.master.json")
+                                 if self.result else Path(self.info["path"]).stem), "tracks": tracks,
+                "transcription": {"model": "medium", "language": "es", "device": "auto"},
+                "chunking": {"mode": "external"}}
         self.cancel = threading.Event()
         self.progress.set(0)
         self.result = None
+        self.plan = None
+        self.editor.refrescar_layout()
         self._set_processing(True)
         self.run_button.configure(text="Cancelar", state="normal")
         self.pipeline_title.configure(text="Procesando…")
@@ -342,12 +399,14 @@ class AutomaticWorkspace:
     def _append_log(self, message: str):
         self.log.configure(state="normal")
         self.log.insert("end", message.rstrip() + "\n")
+        if int(self.log.index("end-1c").split(".")[0]) > 2000:
+            self.log.delete("1.0", "500.0")
         self.log.see("end")
         self.log.configure(state="disabled")
 
     def _pump(self):
         try:
-            while True:
+            for _ in range(200):
                 event = self.events.get_nowait()
                 kind = event.get("tipo")
                 if kind == "log":
@@ -373,10 +432,42 @@ class AutomaticWorkspace:
                                       else planner.upper())
                     self.project_status.configure(text=f"AUTOMÁTICO · {planner_status}")
                     self.run_button.configure(text="Reanudar / actualizar", state="normal")
-                    for button in (self.view_button, self.chunks_button, self.agent_button):
-                        button.configure(state="normal")
+                    self._load_saved_plan()
+                    self._refresh_plan_buttons()
                     self._append_log(f"Listo: {self.result['master']}")
                     self._append_log(f"Planificador: {self.result.get('chunk_planner', 'desconocido')}")
+                elif kind == "review_ready":
+                    self._set_processing(False)
+                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self.review_dialog = ChunkReviewDialog(self.f, event["path"],
+                        on_saved=self._load_saved_plan, master=event["master"], document=self.plan)
+                elif kind == "plan_loaded":
+                    self.plan = event["plan"]
+                    self.editor.refrescar_layout()
+                    self._set_processing(False)
+                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self._append_log(f"Propuesta lista: {len(self.plan['chunks'])} bloques. Revisa el carril de colores antes de aceptar.")
+                elif kind == "export_done":
+                    self._set_processing(False)
+                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self.progress.set(1)
+                    self._append_log(f"Videos exportados: {event['path']}")
+                    self.pipeline_title.configure(text="Cortes exportados")
+                elif kind == "project_loaded":
+                    self.result = event["result"]
+                    self.plan = event["plan"]
+                    self._set_processing(False)
+                    tracks = {track["stream_index"]: track for track in event["tracks"]}
+                    for widget in self.track_widgets:
+                        track = tracks.get(widget["idx"])
+                        widget["selected"].select() if track else widget["selected"].deselect()
+                        if track:
+                            widget["label"].delete(0, "end")
+                            widget["label"].insert(0, track["label"])
+                    self.output_entry.delete(0, "end")
+                    self.output_entry.insert(0, str(Path(self.result["master"]).parent.parent))
+                    self.editor.refrescar_layout()
+                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
                 elif kind == "ui_error":
                     cancelled = self.cancel.is_set()
                     self._set_processing(False)
@@ -385,6 +476,19 @@ class AutomaticWorkspace:
                     self._append_log(("Cancelado: " if cancelled else "ERROR: ") + event["error"])
         except queue.Empty:
             pass
+        self._poll_counter += 1
+        if (self._poll_counter % 20 == 0 and self.result
+                and not (self.worker and self.worker.is_alive())
+                and not (self.review_dialog and self.review_dialog.winfo_exists())):
+            path = Path(self.result["master"]).parent / "views" / "cuts.proposed.json"
+            try:
+                stat = path.stat()
+                stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+                if stamp != self._last_plan_stamp:
+                    self._last_plan_stamp = stamp
+                    self._import_plan(path, reuse_proposal=True)
+            except OSError:
+                pass
         self.f.after(100, self._pump)
 
     def _master_path(self) -> Path | None:
@@ -416,9 +520,8 @@ class AutomaticWorkspace:
     def _review_chunks(self):
         master = self._master_path()
         if master:
-            ChunkReviewDialog(self.f, master, on_saved=lambda: self._append_log(
-                "Chunks revisados y ajustados a bordes seguros; vistas regeneradas "
-                "sin repetir audio."))
+            self._background(lambda: self.events.put({"tipo": "review_ready", "path": master,
+                                                      "master": read_json(master)}))
 
     def _import_agent_chunks(self):
         master = self._master_path()
@@ -429,12 +532,111 @@ class AutomaticWorkspace:
                                  remember="editorial_chunks")
         if not path:
             return
-        try:
-            editorial_pipeline.apply_agent_chunks(master, path)
-        except Exception as error:
-            messagebox.showerror("Plan inválido", str(error))
+        self._import_plan(Path(path))
+
+    def _refresh_plan_buttons(self):
+        ready = bool(self.result)
+        self.view_button.configure(state="normal" if ready else "disabled")
+        self.agent_button.configure(state="normal" if ready else "disabled")
+        for button in (self.chunks_button, self.accept_button):
+            button.configure(state="normal" if ready and self.plan else "disabled")
+
+    def _background(self, work):
+        if self.worker and self.worker.is_alive():
             return
-        self._append_log("Plan del agente validado y materializado sin repetir análisis de audio.")
+        self.cancel = threading.Event()
+        self._set_processing(True)
+        self.run_button.configure(text="Cancelar", state="normal")
+        def guarded():
+            try:
+                work()
+            except Exception as error:
+                self.events.put({"tipo": "ui_error", "error": str(error)})
+        self.worker = threading.Thread(target=guarded, daemon=True)
+        self.worker.start()
+
+    def _import_plan(self, path, *, reuse_proposal=False):
+        master = self._master_path()
+        if master:
+            self.plan = None
+            self.editor.refrescar_layout()
+            def work():
+                plan = editorial_pipeline.apply_agent_chunks(master, path, reuse_proposal=reuse_proposal)
+                self.events.put({"tipo": "plan_loaded", "plan": plan})
+            self._background(work)
+
+    def _load_saved_plan(self):
+        master = self._master_path()
+        path = master.parent / "views" / "chunks.json" if master else None
+        try:
+            self.plan = read_json(path) if path and path.is_file() else None
+        except (ValueError, OSError) as error:
+            self.plan = None
+            self._append_log(f"No se pudo cargar la propuesta: {error}")
+        self.editor.refrescar_layout()
+        self._refresh_plan_buttons()
+
+    def _open_project(self):
+        path = dialogs.open_file("Master editorial del proyecto", [("JSON", ["*.json"])],
+                                 remember="editorial_project")
+        if not path:
+            return
+        # El medio debe estar cargado: la comparación por fingerprint permite mover
+        # carpetas entre Windows y Linux sin confiar en rutas absolutas antiguas.
+        if not self.info:
+            messagebox.showwarning("Falta el medio", "Importa primero el video de este proyecto.")
+            return
+        source = self.info["path"]
+        def work():
+            master = read_json(path)
+            if master.get("schema") != "editorial-master/1":
+                raise ValueError("El archivo no es un master editorial.")
+            if not podcast_export.source_matches(master, source, medios.inspeccionar(source)):
+                raise ValueError("El proyecto pertenece a otro video.")
+            saved = Path(path).parent / "views" / "chunks.json"
+            plan = editorial_chunks.validate_plan(read_json(saved), master) if saved.is_file() else None
+            self.events.put({"tipo": "project_loaded", "plan": plan,
+                             "tracks": list(master["tracks"].values()),
+                             "result": {"master": path, "source": source, "chunk_planner": "external"}})
+        self._background(work)
+
+    def _accept_cuts(self):
+        if not self.plan or not self.info:
+            return
+        master, plan, source = self._master_path(), self.plan, self.info["path"]
+        output = dialogs.open_dir("Carpeta para los videos cortados", remember="podcast_exports")
+        if not output:
+            return
+        self.progress.set(0)
+        self.pipeline_title.configure(text="Exportando cortes…")
+        def work():
+            with editorial_pipeline._RunLock(master.parent / ".work"):
+                destination = podcast_export.export_plan(master, plan, source, output,
+                    cancel=self.cancel, progress_cb=lambda fraction: self.events.put(
+                        {"tipo": "overall", "fraction": fraction}))
+            self.events.put({"tipo": "export_done", "path": str(destination)})
+        self._background(work)
+
+    def _cut_lanes(self):
+        return [{"alto": 36, "dibujar": self._draw_cuts}] if self.plan else []
+
+    def _draw_cuts(self, canvas, geometry, y):
+        x0, width = geometry
+        view_start, span = self.editor.view
+        colors = ("#286f59", "#375c8c", "#78578c", "#926e34", "#397a83", "#8c515a")
+        for index, chunk in enumerate(self.plan["chunks"]):
+            if chunk["t_fin"] <= view_start or chunk["t_ini"] >= view_start + span:
+                continue
+            left = max(x0, self.editor._t2x(chunk["t_ini"], geometry))
+            right = min(x0 + width, self.editor._t2x(chunk["t_fin"], geometry))
+            canvas.create_rectangle(left, y + 2, right, y + 34,
+                                    fill=colors[index % len(colors)], outline="#cbd6d0")
+            if right - left > 45:
+                label = f"{index + 1}. {chunk['title']}"
+                canvas.create_text(left + 5, y + 18, text=label[:max(1, int((right-left-10)/7))],
+                                   anchor="w", fill="white", font=("TkDefaultFont", 10))
+            if index and chunk["t_ini"] >= view_start:
+                canvas.create_line(left, 0, left, y + 34, fill="#ffd27a", dash=(4, 3), width=2)
 
     def activar(self):
         self.editor.activar()

@@ -62,7 +62,7 @@ def hash_file(path: str | Path, *, full_limit: int = 512 * 1024 * 1024) -> str:
 
 
 def read_json(path: str | Path) -> Any:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
 
 def atomic_write_text(path: str | Path, text: str) -> Path:
@@ -90,7 +90,7 @@ def atomic_write_json(path: str | Path, value: Any, *, indent: int = 2) -> Path:
 
 
 def finite_time(value: Any, *, name: str) -> float:
-    if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         raise ValueError(f"{name} debe ser un número finito")
     return float(value)
 

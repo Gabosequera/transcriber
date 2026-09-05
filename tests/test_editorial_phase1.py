@@ -180,12 +180,12 @@ class ChunkTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "número finito"):
             editorial_chunks.validate_plan(plan, master)
 
-    def test_long_recording_requires_three_or_four_chunks(self):
+    def test_long_recording_rejects_chunks_over_fifty_minutes(self):
         master = self.master()
         plan = editorial_chunks.propose_local(master, count=4)
         plan["chunks"] = plan["chunks"][:2]
         plan["chunks"][-1]["t_fin"] = master["media"]["duration"]
-        with self.assertRaisesRegex(ValueError, "3 o 4"):
+        with self.assertRaisesRegex(ValueError, "50 minutos"):
             editorial_chunks.validate_plan(plan, master)
 
     def test_sparse_conversation_still_has_unique_boundaries(self):
@@ -240,7 +240,7 @@ class ChunkTests(unittest.TestCase):
         self.assertEqual(safety["laughter_conflicts"], 0)
         self.assertEqual(safety["utterance_conflicts"], 0)
         self.assertEqual(snapped["chunks"][1]["t_ini"], boundary)
-        self.assertEqual(snapped["boundary_snap"], "global-safe/1")
+        self.assertEqual(snapped["boundary_snap"], "global-safe/2")
 
 
 class CodexChunkerTests(unittest.TestCase):
@@ -347,7 +347,14 @@ class PipelineIntegrationTests(unittest.TestCase):
             with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
                     patches[6], patches[7], patches[8], patches[9]:
                 spec = {"source": str(source), "project_dir": str(project),
-                        "tracks": [{"stream_index": 0, "label": "Gabriel"}]}
+                        "tracks": [{"stream_index": 0, "label": "Gabriel"}],
+                        "chunking": {"mode": "codex"}}
+                # El flujo predeterminado publica metadata sin llamar a una AI.
+                external_spec = {**spec, "chunking": {"mode": "external"}}
+                metadata_only = editorial_pipeline.run(external_spec)
+                self.assertEqual(calls.chunker, 0)
+                self.assertEqual(editorial_io.read_json(metadata_only["master"])["chunks"], [])
+                self.assertTrue((Path(metadata_only["master"]).parent / "tracks/A/emotions.json").is_file())
                 first = editorial_pipeline.run(spec, cancel=threading.Event())
                 resumed = editorial_pipeline.run(spec, cancel=threading.Event())
                 master_path = Path(first["master"])
@@ -357,7 +364,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 reviewed["chunks"][0]["title"] = "Título revisado"
                 editorial_chunks.apply_plan(master_path.parent, master_path, reviewed,
                                              persist_selection=True)
-                second = editorial_pipeline.run(spec, cancel=threading.Event())
+                second = editorial_pipeline.run(external_spec, cancel=threading.Event())
 
             self.assertEqual(first["master"], second["master"])
             self.assertEqual(first["master"], resumed["master"])

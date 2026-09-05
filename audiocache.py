@@ -62,8 +62,17 @@ def load(path, sr=16000, mono=True):
             _CACHE.move_to_end(k)                 # touch (LRU)
             return arr
     # decodificar FUERA del lock (puede tardar; no bloquea a otros lectores)
-    import librosa
-    arr = librosa.load(str(path), sr=sr, mono=mono)[0]
+    import soundfile as sf
+    try:
+        info = sf.info(str(path))
+    except (RuntimeError, OSError):
+        info = None
+    if info is not None and info.samplerate == sr and info.channels == 1:
+        # Las pistas editoriales ya son mono 16 kHz: sin resampleo ni copia a 48 kHz.
+        arr = sf.read(str(path), dtype="float32")[0]
+    else:
+        import librosa
+        arr = librosa.load(str(path), sr=sr, mono=mono)[0]
     arr = np.ascontiguousarray(arr, dtype=np.float32)
     arr.setflags(write=False)                     # solo lectura → mutar in-place por error tira loud
     if arr.nbytes / 2**20 <= _MAX_CACHE_MB and _ram_ok():

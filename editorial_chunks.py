@@ -22,7 +22,9 @@ STOPWORDS = {
     "yo", "tu", "le", "al", "nos", "su", "mi",
 }
 CHUNK_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
-BOUNDARY_SNAP_VERSION = "global-safe/1"
+BOUNDARY_SNAP_VERSION = "global-safe/2"
+MAX_CHUNK_SECONDS = 3000.0
+TARGET_CHUNK_SECONDS = 2700.0
 
 
 def _tokens(utterances: list[dict]) -> Counter:
@@ -63,18 +65,10 @@ def desired_count(master: dict, requested: int | None = None) -> int:
     duration = finite_time(master["media"]["duration"], name="media.duration")
     if duration <= 0:
         raise ValueError("media.duration debe ser positivo")
-    clean = set(master["conversation"].get("clean_utterance_ids") or [])
-    has_text = any(item["utterance_id"] in clean and item.get("text")
-                   for item in master["conversation"].get("utterances") or [])
-    if not has_text:
-        return 1
+    minimum = math.ceil(duration / MAX_CHUNK_SECONDS)
     if requested is not None:
-        return max(1, min(4, int(requested)))
-    if duration >= 9_000:
-        return 4
-    if duration >= 5_400:
-        return 3
-    return max(1, min(4, round(duration / 2_700)))
+        return max(minimum, int(requested), 1)
+    return max(minimum, math.ceil(duration / TARGET_CHUNK_SECONDS))
 
 
 def source_master_digest(master: dict) -> str:
@@ -98,7 +92,9 @@ def propose_local(master: dict, *, count: int | None = None) -> dict:
         radius = max(300.0, ideal * 0.28)
         remaining = count - ordinal
         minimum = boundaries[-1] + min(120.0, ideal * 0.20)
-        maximum = duration - remaining * min(120.0, ideal * 0.20)
+        minimum = max(minimum, duration - remaining * MAX_CHUNK_SECONDS)
+        maximum = min(boundaries[-1] + MAX_CHUNK_SECONDS,
+                      duration - remaining * min(120.0, ideal * 0.20))
         candidates = [index for index in range(1, len(utterances))
                       if abs(utterances[index]["t_ini"] - target) <= radius
                       and minimum < utterances[index]["t_ini"] < maximum]
@@ -124,7 +120,7 @@ def propose_local(master: dict, *, count: int | None = None) -> dict:
         last = inside[-1]["utterance_id"] if inside else None
         summary_text = " ".join(item["text"] for item in inside[:3]).strip()
         chunks.append({
-            "chunk_id": f"chunk-{chr(96 + index)}",
+            "chunk_id": f"chunk-{index:03d}",
             "t_ini": round(start, 3), "t_fin": round(end, 3),
             "title": _title(inside, index),
             "summary": (summary_text[:360] + ("…" if len(summary_text) > 360 else "")),
@@ -147,10 +143,11 @@ def validate_plan(document: dict, master: dict) -> dict:
     chunks = document.get("chunks")
     if not isinstance(chunks, list) or not chunks:
         raise ValueError("chunks debe ser una lista no vacía")
-    duration = float(master["media"]["duration"])
-    if len(chunks) > 4 or (duration >= 5_400 and len(chunks) not in (3, 4)):
-        expected = "3 o 4" if duration >= 5_400 else "entre 1 y 4"
-        raise ValueError(f"el plan debe contener {expected} chunks")
+    duration = finite_time(master["media"]["duration"], name="media.duration")
+    if duration <= 0:
+        raise ValueError("media.duration debe ser positivo")
+    if document.get("source_master_digest") is not None and document["source_master_digest"] != source_master_digest(master):
+        raise ValueError("el plan pertenece a otro master o a metadata desactualizada")
     known_utterances = {item["utterance_id"] for item in master["conversation"]["utterances"]}
     previous_end = 0.0
     identifiers = set()
@@ -159,17 +156,27 @@ def validate_plan(document: dict, master: dict) -> dict:
         if not isinstance(chunk, dict):
             raise ValueError(f"chunk {index + 1} no es un objeto")
         chunk_id = str(chunk.get("chunk_id") or f"chunk-{index + 1}")
-        if not CHUNK_ID_PATTERN.fullmatch(chunk_id):
+        if (not CHUNK_ID_PATTERN.fullmatch(chunk_id) or
+                chunk_id.upper() in {"CON", "PRN", "AUX", "NUL",
+                                     *(f"COM{i}" for i in range(1, 10)),
+                                     *(f"LPT{i}" for i in range(1, 10))}):
             raise ValueError(f"chunk_id inválido: {chunk_id}")
         if chunk_id in identifiers:
             raise ValueError(f"chunk_id duplicado: {chunk_id}")
         identifiers.add(chunk_id)
         start = finite_time(chunk.get("t_ini"), name=f"{chunk_id}.t_ini")
         end = finite_time(chunk.get("t_fin"), name=f"{chunk_id}.t_fin")
-        if abs(start - previous_end) > 0.011:
+        if start < 0 or abs(start - previous_end) > 0.001:
             raise ValueError(f"{chunk_id}: hueco/solape en {previous_end:.3f}→{start:.3f}")
-        if end <= start or end > duration + 0.011:
+        start = previous_end
+        if abs(end - duration) <= 0.001:
+            end = duration
+        if round(end, 3) <= round(start, 3) or end > duration:
             raise ValueError(f"{chunk_id}: rango inválido {start:.3f}..{end:.3f}")
+        if end - start > MAX_CHUNK_SECONDS + 0.001:
+            raise ValueError(f"{chunk_id}: supera el máximo de 50 minutos")
+        if not isinstance(chunk.get("warnings", []), list):
+            raise ValueError(f"{chunk_id}: warnings debe ser una lista")
         for key in ("first_utterance_id", "last_utterance_id"):
             if chunk.get(key) is not None and chunk[key] not in known_utterances:
                 raise ValueError(f"{chunk_id}: {key} desconocido {chunk[key]}")
@@ -185,7 +192,7 @@ def validate_plan(document: dict, master: dict) -> dict:
             "warnings": [str(value) for value in (chunk.get("warnings") or [])],
         })
         previous_end = end
-    if abs(previous_end - duration) > 0.011:
+    if abs(previous_end - duration) > 0.001:
         raise ValueError(f"los chunks terminan en {previous_end:.3f}, no en {duration:.3f}")
     return {**document, "duration": duration, "chunks": normalized}
 
@@ -246,6 +253,9 @@ def boundary_safety(master: dict, timestamp: float) -> dict:
 
 def _snap_boundary(master: dict, target: float, lower: float, upper: float) -> tuple[float, dict]:
     hard, utterances = _boundary_intervals(master)
+    # Solo intervalos cercanos: el costo no depende del podcast completo por candidato.
+    hard = [event for event in hard if event["t_fin"] >= lower - 1 and event["t_ini"] <= upper + 1]
+    utterances = [event for event in utterances if event["t_fin"] >= lower and event["t_ini"] <= upper]
     candidates = {target, lower, upper}
     for event in (*hard, *utterances):
         start, end = float(event["t_ini"]), float(event["t_fin"])
@@ -291,11 +301,15 @@ def snap_plan_to_safe_boundaries(document: dict, master: dict, *,
     adjustments = []
     for index, target in enumerate(targets):
         next_target = targets[index + 1] if index + 1 < len(targets) else duration
-        lower = max(boundaries[-1] + 0.1, target - radius_seconds)
-        upper = min(next_target - 0.1, target + radius_seconds)
-        if upper <= lower:
+        lower = max(boundaries[-1] + 0.001, target - radius_seconds,
+                    duration - (len(targets) - index) * MAX_CHUNK_SECONDS)
+        upper = min(next_target - 0.001, target + radius_seconds,
+                    boundaries[-1] + MAX_CHUNK_SECONDS)
+        if upper < lower:
             raise ValueError(f"no hay espacio para ajustar el borde cercano a {target:.3f}")
         final, safety = _snap_boundary(master, target, lower, upper)
+        if safety["word_conflicts"] or safety["laughter_conflicts"]:
+            raise ValueError(f"No hay un corte seguro cerca de {target:.3f}s; revisa el plan.")
         boundaries.append(final)
         adjustments.append({
             "boundary_index": index + 1,
@@ -427,6 +441,7 @@ def apply_plan(root: str | Path, master_path: str | Path, document: dict, *,
     root, master_path = Path(root), Path(master_path)
     master = read_json(master_path)
     validated = validate_plan(document, master)
+    validated["source_master_digest"] = source_master_digest(master)
     master["chunks"] = validated["chunks"]
     atomic_write_json(root / "views" / "chunks.json", validated)
     atomic_write_text(root / "views" / "chunks.md", chunks_markdown(validated))

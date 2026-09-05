@@ -32,6 +32,47 @@ REQUIRED_IMPORTS = (
 )
 
 
+def verify_podcast_ui(window):
+    """Ejercita el carril, aceptación habilitada y guardado sin inferencia de modelos."""
+    import tempfile
+    import time
+    from automatico_ui import ChunkReviewDialog
+    from editorial_io import atomic_write_json, read_json
+    import editorial_chunks
+
+    with tempfile.TemporaryDirectory(prefix="transcriptor-ui-") as temporary:
+        root = Path(temporary)
+        master = {"media": {"duration": 60.0}, "tracks": {},
+                  "conversation": {"utterances": [], "clean_utterance_ids": []}}
+        master_path = atomic_write_json(root / "test.editorial.master.json", master)
+        plan = {"schema": "editorial-chunks/1", "planner": "installer-check",
+                "chunks": [{"chunk_id": "chunk-001", "t_ini": 0.0, "t_fin": 60.0,
+                            "title": "Prueba", "confidence": 0.8}]}
+        editorial_chunks.apply_plan(root, master_path, plan, persist_selection=True)
+        workspace = window.automatico
+        workspace.result = {"master": str(master_path)}
+        workspace._load_saved_plan()
+        assert workspace.accept_button.cget("state") == "normal"
+        workspace.editor.info = {"duracion": 60.0, "pistas": []}
+        workspace.editor.view = [0.0, 60.0]
+        workspace.editor.refrescar_layout()
+        window.update()
+        assert workspace.editor.tl.find_all()
+        dialog = ChunkReviewDialog(workspace.f, master_path)
+        workspace.review_dialog = dialog
+        dialog.rows[0]["title"].delete(0, "end")
+        dialog.rows[0]["title"].insert(0, "Título revisado")
+        dialog._save()
+        deadline = time.monotonic() + 10
+        while dialog.winfo_exists() and time.monotonic() < deadline:
+            window.update()
+            time.sleep(0.02)
+        assert not dialog.winfo_exists(), "El diálogo no terminó de guardar"
+        assert read_json(root / "views/chunks.json")["chunks"][0]["title"] == "Título revisado"
+        workspace.result = None
+        workspace.plan = None
+
+
 def load_json(path: Path) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -84,13 +125,19 @@ def verify(root: Path) -> None:
         f"sys.path.insert(0, {str(release)!r}); "
         f"mods={REQUIRED_IMPORTS!r}; "
         "[importlib.import_module(name) for name in mods]; "
-        "import torch; "
+        "import torch, torchaudio; "
+        "assert hasattr(torchaudio.pipelines, 'MMS_FA'); "
+        "torchaudio.functional.forced_align(torch.log_softmax(torch.randn(1, 5, 3), -1), torch.tensor([[1, 2]], dtype=torch.int32)); "
         f"assert torch.__version__.split('+')[0] == {expected_torch!r}, torch.__version__; "
         f"assert torch.version.cuda == {expected_cuda!r}, torch.version.cuda; "
         "import app, app_paths, core, hardware, updater; "
         "window=app.App(); "
         "window.update_idletasks(); "
         "window.update(); "
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); "
+        "from verify_windows_install import verify_podcast_ui; "
+        "verify_podcast_ui(window); "
+        "window.automatico.cerrar(); "
         "window.destroy(); "
         f"updater.verify_installed_release(Path({str(release)!r}), {version!r}); "
         "print('Interfaz Windows OK')"

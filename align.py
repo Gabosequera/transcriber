@@ -47,6 +47,8 @@ def _load():
     if _MODEL is None:
         import torchaudio
         import hardware
+        if not hasattr(torchaudio.pipelines, "MMS_FA") or not hasattr(torchaudio.functional, "forced_align"):
+            raise RuntimeError("MMS necesita torch/torchaudio 2.8.0; repara la instalación.")
         b = torchaudio.pipelines.MMS_FA
         model, _dev = hardware.load_model_safe(lambda d: b.get_model().to(d))
         _MODEL, _TOK, _ALN = model, b.get_tokenizer(), b.get_aligner()
@@ -69,7 +71,6 @@ def align_words(audio, words, *, batch=120, margin=0.5, log_cb=None,
     `progress_cb(frac 0..1, eta_seg|None)` se llama por lote."""
     import time
     import torch
-    import librosa
     import hardware
 
     # Hilos de CPU y dispositivo salen de la config global (pestaña Ajustes): por defecto
@@ -94,15 +95,21 @@ def align_words(audio, words, *, batch=120, margin=0.5, log_cb=None,
         if cancel is not None and cancel.is_set():
             raise InterruptedError("alineación MMS cancelada")
         grp = words[i:i + batch]
+        # Un lote contado por palabras podía abarcar minutos de silencio.
+        while len(grp) > 1 and grp[-1]["end"] - grp[0]["start"] > 30.0:
+            grp = grp[:-1]
+        consumed = len(grp)
         norms = [_norm(w["word"]) for w in grp]
         idxs = [k for k, n in enumerate(norms) if n]        # posiciones alineables
         if not idxs:
             out.extend({**w, "alignment_source": "whisper_unalignable"} for w in grp)
-            i += batch
+            i += consumed
             continue
 
         t0 = max(0.0, grp[0]["start"] - margin)
         t1 = min(total, grp[-1]["end"] + margin)
+        if t1 - t0 > 32.0:
+            raise RuntimeError(f"Palabra con duración anómala en {t0:.3f}s; revisa la transcripción.")
         seg = torch.tensor(wav[int(t0 * 16000):int(t1 * 16000)]).unsqueeze(0).to(dev)
         trans = [norms[k] for k in idxs]
 
@@ -140,7 +147,7 @@ def align_words(audio, words, *, batch=120, margin=0.5, log_cb=None,
                 nw["alignment_source"] = "whisper_fallback"
             out.append(nw)
 
-        i += batch
+        i += consumed
         done = min(i, n_words)
         if progress_cb:
             frac = done / n_words

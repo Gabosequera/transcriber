@@ -56,6 +56,8 @@ class BundleTests(unittest.TestCase):
             )
             release = result["release_dir"]
             self.assertTrue((release / "app.py").is_file())
+            self.assertTrue((release / "skills/transcriptor/SKILL.md").is_file())
+            self.assertTrue((release / "podcast_export.py").is_file())
             self.assertEqual(release_state.load_current(root)["current"], PROJECT_VERSION)
             self.assertFalse(any((root / "updates" / "staging").iterdir()))
 

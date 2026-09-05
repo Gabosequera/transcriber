@@ -195,6 +195,8 @@ def extract_arousal(audio: str | Path, *, window_seconds: float = 4.0,
                 "t_ini": round(offset / SAMPLE_RATE, 3),
                 "t_fin": round(end, 3),
                 "arousal": round(float(values[0]), 6),
+                "dominance": round(float(values[1]), 6),
+                "valence": round(float(values[2]), 6),
                 "rms_dbfs": round(20 * math.log10(max(rms, 1e-9)), 3),
             })
         fraction = min(1.0, (batch_start + len(offsets)) / max(1, len(starts)))
@@ -229,7 +231,6 @@ def extract_word_intensity(audio: str | Path, words: list[dict], *,
     import audiocache
 
     waveform = np.asarray(audiocache.load(audio, sr=SAMPLE_RATE, mono=True), dtype=np.float32)
-    prefix = _prefix_energy(waveform)
     context = int(round(local_context_seconds * SAMPLE_RATE))
     events: list[dict] = []
     total = len(words)
@@ -242,12 +243,16 @@ def extract_word_intensity(audio: str | Path, words: list[dict], *,
         end = min(len(waveform), max(start + 1, int(round(end_time * SAMPLE_RATE))))
         end = min(end, len(waveform))
         before_start, after_end = max(0, start - context), min(len(waveform), end + context)
+        # Solo la palabra y su contexto: evita varios GB de prefijos float64
+        # para podcasts de tres horas.
+        prefix = _prefix_energy(waveform[before_start:after_end])
+        local_start, local_end = start - before_start, end - before_start
         floor_parts = []
         if start > before_start:
-            floor_parts.append(_rms_db(prefix, before_start, start))
+            floor_parts.append(_rms_db(prefix, 0, local_start))
         if after_end > end:
-            floor_parts.append(_rms_db(prefix, end, after_end))
-        rms_dbfs = _rms_db(prefix, start, end)
+            floor_parts.append(_rms_db(prefix, local_end, after_end - before_start))
+        rms_dbfs = _rms_db(prefix, local_start, local_end)
         peak = float(np.max(np.abs(waveform[start:end]))) if end > start else 0.0
         peak_dbfs = 20 * math.log10(max(peak, 1e-9))
         local_floor = float(np.mean(floor_parts)) if floor_parts else -120.0
@@ -267,7 +272,7 @@ def extract_word_intensity(audio: str | Path, words: list[dict], *,
     baseline = _zscore(events, "rms_dbfs", "intensity_z")
     durations = np.asarray([event["duration"] for event in events], dtype=np.float64)
     duration_mean = float(durations.mean()) if durations.size else 0.0
-    duration_std = float(durations.std()) or 1.0
+    duration_std = (float(durations.std()) or 1.0) if durations.size else 1.0
     for event in events:
         duration_z = (event["duration"] - duration_mean) / duration_std
         linear = 0.72 * event["intensity_z"] + 0.18 * duration_z \

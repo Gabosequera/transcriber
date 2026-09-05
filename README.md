@@ -9,56 +9,81 @@ App de escritorio Linux/Windows con dos modos de trabajo:
 - **Automático** (predeterminado): pipeline editorial multipista para videos largos.
 - **Manual**: las herramientas anteriores de transcripción, limpieza, metadata y marcas.
 
-## Modo Automático · perfil editorial de voz
+## Podcasts · voz y propuestas externas
 
-Importa un video, muestra todas sus pistas y permite marcar varias como voz. Por cada
-pista seleccionada ejecuta únicamente:
+1. Importa el video y marca las pistas que contienen voces (pueden compartir pista).
+   Pulsa **Procesar pistas de voz**. La app extrae audio mono 16 kHz, transcribe con
+   Whisper, alinea palabras con MMS y extrae risa, intensidad y emoción acústica.
+   Las etapas se guardan para reanudar sin repetir inferencia ya completada.
+2. Fuera de la app, entrega a tu AI la skill incluida en
+   [`skills/transcriptor/SKILL.md`](skills/transcriptor/SKILL.md) y la carpeta del proyecto.
+   Por ejemplo: «Usa la skill transcriptor para proponer cortes del podcast en esta carpeta».
+   Puedes agregar esa carpeta de skill al directorio de skills de tu herramienta de AI.
+3. La AI lee la conversación completa y las señales, y escribe
+   `editorial/views/cuts.proposed.json`. Propone cambios de tema con objetivo de hasta
+   **45 minutos y máximo de 50 minutos** por bloque. El número de bloques es variable.
+4. Con el proyecto abierto, la app detecta ese archivo cada dos segundos; también
+   puedes usar **Importar plan JSON externo**. Valida su identidad y cobertura y ajusta
+   bordes hasta 15 segundos sin atravesar palabras ni risas. El timeline muestra cada
+   bloque en un color distinto y marca sus límites. **Revisar chunks** permite modificar
+   títulos/límites y consultar la confianza antes de aceptar.
+5. Pulsa **Aceptar y exportar cortes** y elige la carpeta de salida. Se crean videos
+   MP4 H.264/AAC numerados, con todas las pistas de audio, y un registro del plan aceptado.
+   Para fuentes de solo audio se generan M4A. El archivo original se conserva.
+   La exportación recodifica para cortar con precisión de fotograma; su velocidad depende
+   de resolución, duración y CPU. Puedes cancelarla: no publica una carpeta incompleta.
 
-1. Whisper + alineación MMS obligatoria;
-2. detección de risa;
-3. prosodia acústica: arousal sobre regiones de habla e intensidad por palabra.
+Para volver a un proyecto, importa su video y pulsa **Abrir proyecto existente** para
+seleccionar el master JSON. No hace falta repetir el análisis para cargar otra propuesta.
+La app no ejecuta Codex ni requiere una API de lenguaje para extraer esta metadata.
+Las emociones son estimaciones de activación, dominancia y valencia, no diagnósticos
+ni identificación de hablantes. El análisis de gameplay/cara no participa en este flujo.
 
-Después genera una conversación global sincronizada, deduplica bleed de forma
-conservadora y construye `<proyecto>.editorial.master.json`. Por defecto, Codex CLI lee
-la conversación completa y propone 3–4 chunks macro semánticos. La app ajusta sus
-límites contra las palabras, risas e intervenciones de todas las pistas; después se
-pueden revisar sin repetir inferencia de audio. Si Codex no está disponible, se usa un
-fallback local marcado explícitamente. Cada chunk recibe transcript y señales por pista.
-
-Salida principal:
+Archivos del proyecto:
 
 ```text
 <proyecto>/editorial/
-  <proyecto>.editorial.master.json
-  tracks/A/...
-  tracks/B/...
-  views/conversation.md
-  views/chunks.json
-  chunks/chunk-a/...
+  <nombre>.editorial.master.json   # metadata combinada, tiempos absolutos del video
+  tracks/A/                      # una carpeta por pista de voz
+    audio.flac
+    words.aligned.json
+    words.json
+    utterances.json
+    laughter.json
+    arousal.json
+    intensity.json
+    emotions.json
+  views/
+    conversation.md
+    conversation-signals.md
+    chunk-agent-request.md       # contrato y source_master_digest para la AI
+    cuts.proposed.json           # salida de la AI externa
+    chunks.json                 # propuesta validada que pinta el timeline
+  chunks/chunk-001/              # transcript y señales por bloque tras importar
 ```
 
-También se puede ejecutar headless:
+`cuts.proposed.json` usa `schema: "editorial-chunks/1"`, `source_master_digest`,
+`planner` y `chunks`. Cada bloque lleva ID, inicio/final en segundos, título, resumen,
+razones, referencias de intervenciones, confianza y advertencias. El contrato completo
+se genera en `chunk-agent-request.md`. Se rechazan planes de otra metadata, huecos,
+solapes, tiempos no finitos y bloques de más de 3000 segundos. La AI debe escribir el
+JSON completo de forma atómica. No edites directamente el master ni `chunks.json`.
+
+También funciona sin interfaz:
 
 ```bash
-python editorial_pipeline.py run video.mkv \
-  --project-dir proyecto \
-  --track '0=Gabriel + amigo 1' \
-  --track '1=Amigo 2'
-
-# Para exigir Codex y no aceptar el fallback local:
-python editorial_pipeline.py run video.mkv \
-  --project-dir proyecto \
-  --track '0=Gabriel + amigo 1' \
-  --track '1=Amigo 2' \
-  --no-chunk-fallback
-
-python editorial_pipeline.py apply-chunks \
-  proyecto/editorial/video.editorial.master.json chunks-del-agente.json
+python editorial_pipeline.py run video.mkv --project-dir proyecto --track '0=Voces'
+python editorial_pipeline.py apply-chunks proyecto/editorial/video.editorial.master.json proyecto/editorial/views/cuts.proposed.json
 ```
 
-El contrato vigente y las fases están en `CAMBIO-INTERFAZ-Y-DISTRIBUCION.md`.
-El chunking automático requiere Codex CLI instalado y autenticado; usa `codex exec`
-efímero con sandbox de solo lectura y una salida JSON validada por schema.
+Los modos anteriores de planificación interna siguen disponibles con `--chunker codex`
+o `--chunker local`; el predeterminado es `external`. El borrador local usa señales
+léxicas y pausas y requiere revisión semántica.
+
+Validación de desarrollo: `python -m unittest discover -s tests -v`. Las pruebas usan
+metadata simulada y medios sintéticos con FFmpeg; no certifican la exactitud de Whisper
+ni la calidad editorial de una AI sobre un podcast real de tres horas. La instalación
+Windows y la alineación CTC se verifican además en el workflow de Windows.
 
 ## Modo Manual
 

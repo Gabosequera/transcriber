@@ -24,7 +24,7 @@ INSTALLER_ROOT_FILES = {
     "configurar-github.bat", "configurar-github.ps1",
 }
 INSTALLER_TOOL_FILES = {"tools/verify_windows_install.py"}
-TORCH_VERSION = "2.9.1"
+TORCH_VERSION = "2.8.0"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 
 
@@ -39,6 +39,7 @@ def digest_bytes(data: bytes) -> str:
 def source_files() -> list[Path]:
     files = [path for path in PROJECT.glob("*.py") if path.is_file()]
     files.extend(PROJECT / name for name in sorted(ROOT_FILES) if (PROJECT / name).is_file())
+    files.extend((PROJECT / "skills").glob("*/SKILL.md"))
     return sorted(set(files), key=lambda path: path.name.casefold())
 
 
@@ -63,7 +64,7 @@ def build(version: str, output: Path, *, require_repository: bool = False) -> tu
     payloads: dict[str, bytes] = {}
     for path in source_files():
         data = path.read_bytes()
-        relative = path.name
+        relative = path.relative_to(PROJECT).as_posix()
         payloads[relative] = data
         entries.append({"path": relative, "size": len(data), "sha256": digest_bytes(data)})
     release_manifest = {

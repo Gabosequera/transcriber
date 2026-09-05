@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -71,9 +72,9 @@ def _validate_spec(spec: dict, info: dict) -> dict:
     chunking = spec.get("chunking") or {}
     if not isinstance(chunking, dict):
         raise ValueError("chunking debe ser un objeto")
-    chunking_mode = str(chunking.get("mode", "codex")).lower()
-    if chunking_mode not in ("codex", "local"):
-        raise ValueError("chunking.mode debe ser codex o local")
+    chunking_mode = str(chunking.get("mode", "external")).lower()
+    if chunking_mode not in ("external", "codex", "local"):
+        raise ValueError("chunking.mode debe ser external, codex o local")
     timeout_seconds = float(chunking.get("timeout_seconds", 1_800))
     if timeout_seconds <= 0:
         raise ValueError("chunking.timeout_seconds debe ser positivo")
@@ -126,6 +127,10 @@ class _RunLock(AbstractContextManager):
             import psutil
             return psutil.pid_exists(pid)
         except Exception:
+            if os.name == "nt":
+                # os.kill(pid, 0) en Windows puede terminar el proceso.
+                # Sin psutil, no se roba un lock cuya vida no podemos comprobar.
+                return True
             try:
                 os.kill(pid, 0)
                 return True
@@ -289,6 +294,18 @@ def _track_paths(root: Path, identifier: str) -> dict[str, Path]:
 
 
 def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> dict:
+    try:
+        return _run(spec, event_cb=event_cb, cancel=cancel)
+    finally:
+        # También liberar pesos/audio al cancelar o fallar; no cargar módulos nuevos.
+        for name, method in (("align", "unload"), ("prosodia", "unload"),
+                             ("laughter", "unload"), ("audiocache", "clear")):
+            module = sys.modules.get(name)
+            if module is not None:
+                getattr(module, method)()
+
+
+def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> dict:
     """Ejecuta/reanuda la Fase 1 local y devuelve rutas de sus artefactos principales."""
     cancel = cancel or threading.Event()
     if not isinstance(spec, dict):
@@ -323,12 +340,12 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
 
             def extract_action(stage, progress, *, media_track=media_track, relative=relative):
                 return medios.extraer_pista(resolved["source"], media_track, stage / relative,
-                                             mono=True, cancel=cancel,
+                                             mono=True, sample_rate=16000, cancel=cancel,
                                              log_cb=lambda message: _emit(event_cb, "log", message=message),
                                              progress_cb=progress)
 
             store.run(f"extract_{identifier}", f"Extraer voz {identifier}",
-                      params={"track": media_track, "mono": True}, dependencies=[],
+                      params={"track": media_track, "mono": True, "sample_rate": 16000}, dependencies=[],
                       outputs=[relative], action=extract_action,
                       validate=_validate_audio)
             completed()
@@ -366,12 +383,15 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
                       validate=_validate_json)
             completed()
 
+        import align
+        align.unload()
+
         # 3. Arousal e intensidad. El modelo permanece cargado entre pistas.
         for track in resolved["tracks"]:
             identifier = track["track_id"]
             paths = _track_paths(root, identifier)
             outputs = [f"tracks/{identifier}/{name}" for name in
-                       ("words.json", "arousal.json", "intensity.json")]
+                       ("words.json", "arousal.json", "intensity.json", "emotions.json")]
 
             def prosody_action(stage, progress, *, identifier=identifier, paths=paths, outputs=outputs):
                 aligned_words = read_json(paths["aligned_words"])
@@ -386,13 +406,17 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
                     progress_cb=lambda fraction, eta=None: progress(0.85 + fraction * 0.15),
                 )
                 enriched = prosodia.enrich_words(aligned_words, intensity, arousal)
-                for relative, value in zip(outputs, (enriched, arousal, intensity)):
+                for relative, value in zip(outputs, (enriched, arousal, intensity,
+                        {"schema": "editorial-emotions/1", "model": prosodia.AUDEERING,
+                         "events": [{key: event.get(key) for key in
+                                     ("t_ini", "t_fin", "arousal", "dominance", "valence")}
+                                    for event in arousal["events"]]})):
                     atomic_write_json(stage / relative, value)
                 return {"arousal_windows": len(arousal["events"]), "words": len(enriched)}
 
             store.run(f"prosody_{identifier}", f"Arousal + intensidad · {identifier}",
                       params={"arousal_window": 4.0, "arousal_hop": 2.0,
-                              "arousal_scope": "speech-regions/1",
+                              "arousal_scope": "speech-regions/2-emotions",
                               "intensity": "word-mms/1"},
                       dependencies=[f"extract_{identifier}", f"transcribe_{identifier}"],
                       outputs=outputs, action=prosody_action,
@@ -459,9 +483,37 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
             progress(1.0)
             return {"tracks": len(tracks), "utterances": len(master["conversation"]["utterances"])}
 
-        store.run("master", "Master + conversación global", params={"schema": "editorial-master/1"},
+        store.run("master", "Master + conversación global", params={"schema": "editorial-master/1", "podcast": 2},
                   dependencies=dependencies, outputs=view_outputs, action=master_action)
         completed()
+
+        if resolved["chunking"]["mode"] == "external":
+            master_path = root / master_relative
+            base_master = read_json(root / base_master_relative)
+            selected = root / ".work" / "chunks.selected.json"
+            plan = None
+            if selected.is_file():
+                try:
+                    candidate = read_json(selected)
+                    if candidate.get("source_master_digest") == editorial_chunks.source_master_digest(base_master):
+                        plan = editorial_chunks.validate_plan(candidate, base_master)
+                except (ValueError, OSError):
+                    pass
+            atomic_write_json(master_path, base_master)
+            if plan:
+                editorial_chunks.apply_plan(root, master_path, plan)
+            else:
+                # Un plan viejo no debe aparecer sobre metadata de otra corrida.
+                for name in ("chunks.json", "chunks.md"):
+                    (root / "views" / name).unlink(missing_ok=True)
+            state = {"schema": "editorial-run/1", "status": "ok",
+                     "source": str(resolved["source"]), "root": str(root),
+                     "master": str(master_path), "chunk_planner": "external",
+                     "completed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            atomic_write_json(root / "run.json", state)
+            _emit(event_cb, "overall", fraction=1.0)
+            _emit(event_cb, "done", result=state)
+            return state
 
         # 6. Codex lee la conversación completa y propone los chunks semánticos. Este
         # paso queda cacheado por separado: jamás repite audio al cambiar el plan.
@@ -596,15 +648,27 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
         return state
 
 
-def apply_agent_chunks(master_path: str | Path, document_path: str | Path) -> dict:
+def apply_agent_chunks(master_path: str | Path, document_path: str | Path, *,
+                       reuse_proposal: bool = False) -> dict:
     """Aplica una respuesta de Codex/agente y regenera únicamente derivados de chunks."""
     master_path = Path(master_path)
     root = master_path.parent
-    master = read_json(master_path)
-    document = read_json(document_path)
-    document = editorial_chunks.snap_plan_to_safe_boundaries(document, master)
-    return editorial_chunks.apply_plan(root, master_path, document,
-                                       persist_selection=True)
+    with _RunLock(root / ".work"):
+        master = read_json(master_path)
+        document = read_json(document_path)
+        if not isinstance(document, dict) or not document.get("source_master_digest"):
+            raise ValueError("el plan externo debe incluir source_master_digest (ver chunk-agent-request.md)")
+        proposal_digest = digest_json(document)
+        selected = root / ".work/chunks.selected.json"
+        if reuse_proposal and selected.is_file():
+            saved = read_json(selected)
+            if (saved.get("source_proposal_digest") == proposal_digest and
+                    saved.get("source_master_digest") == editorial_chunks.source_master_digest(master)):
+                return editorial_chunks.validate_plan(saved, master)
+        document = editorial_chunks.snap_plan_to_safe_boundaries(document, master)
+        document["source_proposal_digest"] = proposal_digest
+        return editorial_chunks.apply_plan(root, master_path, document,
+                                           persist_selection=True)
 
 
 def _parse_track(value: str) -> dict:
@@ -632,8 +696,8 @@ def main(argv=None) -> int:
     run_parser.add_argument("--model", default="medium")
     run_parser.add_argument("--language", default="es")
     run_parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
-    run_parser.add_argument("--chunks", type=int, choices=(3, 4), default=None)
-    run_parser.add_argument("--chunker", choices=("codex", "local"), default="codex")
+    run_parser.add_argument("--chunks", type=int, default=None)
+    run_parser.add_argument("--chunker", choices=("external", "codex", "local"), default="external")
     run_parser.add_argument("--codex-model")
     run_parser.add_argument("--codex-timeout", type=float, default=1_800,
                             help="límite de la lectura semántica, en segundos")
