@@ -451,3 +451,18 @@ comentarios para AI, protección frente a cambios externos. 62 tests y smoke Tk.
 Diseño publicado antes de código. Objetivo A: exportación con sub-masters trazables
 por segmentos, señales multipista y audio RMS reanudable. 57 tests y smoke real de
 App/Tk en Windows. Corregidas importaciones pesadas descubiertas por el smoke.
+
+## 2026-09-06 (4ª sesión) — Timeline estable y panel derecho ajustable (0.3.2)
+
+El detalle del item de capa bajo el mouse se escribía en el status del pie del
+editor; su wrap cambiaba la altura del pie y el timeline y el preview (filas
+elásticas) saltaban con cada movimiento del mouse sobre las capas. Ahora el pie
+tiene altura fija de dos renglones (lo que no entra se recorta, nunca empuja) y
+el detalle vive en `LayerDetailBar`, una barra propia de altura constante entre el
+timeline y el status: color de origen/capa, capa, etiqueta, estado, tramos y el
+comentario recortado con «…» al ancho real; sin mouse encima muestra el item
+seleccionado o la ayuda. El panel derecho de Automático se redimensiona
+arrastrando el divisor (doble click restaura 292; el ancho se guarda en
+`config.json`). 77 tests y smoke Tk con capturas: el timeline no se mueve con
+textos largos ni con el hover; el divisor cambia el ancho, respeta el mínimo y
+persiste.

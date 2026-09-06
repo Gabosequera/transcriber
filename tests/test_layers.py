@@ -105,3 +105,22 @@ class LayersTests(unittest.TestCase):
         self.assertEqual(view['items'][0]['comment'],'Revisar tangente')
         view['items'][0]['comment']='solo snapshot'
         self.assertEqual(marks,before)
+
+
+class LayerDetailBarHelpersTests(unittest.TestCase):
+    """Helpers puros de la barra de detalle (sin Tk)."""
+
+    def test_elide_fits_and_marks_the_cut(self):
+        measure=lambda s:7*len(s)
+        self.assertEqual(layers.elide(measure,'corto',100),'corto')
+        cut=layers.elide(measure,'comentario bastante largo para la AI',100)
+        self.assertTrue(cut.endswith('…') and measure(cut)<=100 and len(cut)>5,cut)
+        self.assertEqual(layers.elide(measure,'nada',3),'')
+        self.assertEqual(layers.elide(measure,'x',None),'x')
+
+    def test_ranges_summary_formats(self):
+        self.assertEqual(layers.clock(3725.25),'1:02:05.2')
+        self.assertEqual(layers.ranges_summary([dict(t_ini=12,t_fin=40.5)]),'0:12.0 – 0:40.5 · 28.5 s')
+        self.assertEqual(layers.ranges_summary([dict(t_ini=62,t_fin=62)]),'1:02.0 · punto')
+        self.assertEqual(layers.ranges_summary([dict(t_ini=12,t_fin=20),dict(t_ini=300,t_fin=340.5)]),
+                         '2 tramos · 0:12.0 – 5:40.5 · 48.5 s')

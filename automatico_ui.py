@@ -40,6 +40,12 @@ COL_TRIM_LOD = {True: "#3b8fb3", False: "#2b3d46"}
 TRIM_ORIGIN_LABEL = {"silence": "silencio", "ai": "AI", "user": "tuyo"}
 TRIM_LOD_MAX = 400                     # hasta acá se dibuja cada recorte por separado
 
+# ---- panel derecho: ancho inicial, límites y divisor arrastrable ----
+PANEL_WIDTH = 292                      # ancho por defecto (doble click en el divisor lo restaura)
+PANEL_MIN = 292                        # por debajo se recortan los pasos del pipeline y recortes
+EDITOR_MIN = 620                       # el editor conserva sus controles (390) + timeline útil
+SASH_W = 10
+
 
 class ChunkReviewDialog(ctk.CTkToplevel):
     def __init__(self, parent, master_path: Path, on_saved=None, *, master=None, document=None):
@@ -285,10 +291,12 @@ class AutomaticWorkspace:
         self.import_button.grid(row=0, column=1, rowspan=2, sticky="e")
 
     def _build_workspace(self):
+        from editorial_layers_ui import LayerDetailBar
         body = ctk.CTkFrame(self.f, fg_color="transparent")
         body.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(0, weight=1)
+        self.body = body
 
         self.editor = EditorMedios(body, ancho_ctl=390,
                                    controles_pista_extra=self._build_track_controls,
@@ -296,14 +304,25 @@ class AutomaticWorkspace:
                                    carriles_extra=self._cut_lanes,
                                    on_playhead=self._on_playhead,
                                    teclas_extra=self.layers.keys, marcas_en_capas=True)
-        self.editor.f.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        # hover = tooltip del recorte · click derecho = menú · click en MARCAS deselecciona
+        self.editor.f.grid(row=0, column=0, sticky="nsew")
+        # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
+        # en la fila libre del editor (entre el timeline y el status) — nada de
+        # escribirlo en el status, cuyo wrap movía timeline y preview con cada hover
+        self.layers.detail = LayerDetailBar(self.editor.f, row=4, colors=dict(
+            bg=BG, surface=SURFACE, raised=SURFACE_RAISED, border=BORDER, muted=MUTED,
+            text=TEXT, text_soft="#c6cec9"))
+        # hover = tooltip + barra de detalle · salir del timeline vuelve a la selección
+        # · click derecho = menú · click en MARCAS deselecciona
         self.editor.tl.bind("<Motion>", self.layers.hover, add=True)
+        self.editor.tl.bind("<Leave>", self.layers.leave, add=True)
         self.editor.tl.bind("<Button-3>", self.layers.menu, add=True)
 
-        panel = ctk.CTkScrollableFrame(body, width=292, fg_color=SURFACE, corner_radius=10,
-                             border_width=1, border_color=BORDER)
-        panel.grid(row=0, column=1, sticky="nsew")
+        self._build_sash(body)
+        self._panel_width = self._clamp_panel(hardware.load().get("automatico_panel_width"))
+        panel = ctk.CTkScrollableFrame(body, width=self._panel_width, fg_color=SURFACE,
+                                       corner_radius=10, border_width=1, border_color=BORDER)
+        panel.grid(row=0, column=2, sticky="nsew")
+        self.panel = panel
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(6, weight=1)
         ctk.CTkLabel(panel, text="PIPELINE EDITORIAL", text_color=MUTED,
@@ -405,6 +424,70 @@ class AutomaticWorkspace:
         ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
             row=15, column=0, sticky="ew", padx=14, pady=5)
 
+    # ---- divisor arrastrable entre el editor y el panel derecho ----
+    def _build_sash(self, body):
+        """El ancho del panel se cambia arrastrando el divisor (cursor ↔, agarradera
+        que se enciende al pasar); doble click restaura el ancho inicial. El valor
+        se recuerda en config.json al soltar. Mover el divisor pasa por el mismo
+        camino que redimensionar la ventana (el editor ya lo debounce-a)."""
+        sash = ctk.CTkFrame(body, width=SASH_W, fg_color="transparent",
+                            cursor="sb_h_double_arrow")
+        sash.grid(row=0, column=1, sticky="ns")
+        self._sash_grip = ctk.CTkFrame(sash, width=3, height=40, corner_radius=2,
+                                       fg_color=BORDER, cursor="sb_h_double_arrow")
+        self._sash_grip.place(relx=.5, rely=.5, anchor="center")
+        self._sash_drag = None
+        for widget in (sash, self._sash_grip):
+            widget.bind("<Enter>", lambda e: self._sash_grip.configure(fg_color=ACCENT))
+            widget.bind("<Leave>", self._sash_leave)
+            widget.bind("<Button-1>", self._sash_press)
+            widget.bind("<B1-Motion>", self._sash_move)
+            widget.bind("<ButtonRelease-1>", self._sash_release)
+            widget.bind("<Double-Button-1>", self._sash_reset)
+
+    def _clamp_panel(self, width) -> int:
+        try:
+            width = int(width)
+        except (TypeError, ValueError):
+            width = PANEL_WIDTH
+        body_width = self.body.winfo_width()
+        limit = max(PANEL_MIN, body_width - EDITOR_MIN) if body_width > 1 else 900
+        return int(max(PANEL_MIN, min(limit, width)))
+
+    def _apply_panel_width(self, width: int):
+        self._panel_width = width
+        self.panel.configure(width=width)
+        self.trims_status.configure(wraplength=max(140, width - 48))
+
+    def _sash_leave(self, _e=None):
+        if self._sash_drag is None:
+            self._sash_grip.configure(fg_color=BORDER)
+
+    def _sash_press(self, e):
+        # e.x_root está en píxeles reales; el ancho del panel en unidades de CTk
+        self._sash_drag = (e.x_root, self._panel_width,
+                           ctk.ScalingTracker.get_widget_scaling(self.panel) or 1.0)
+
+    def _sash_move(self, e):
+        if self._sash_drag is None:
+            return
+        x0, width0, scale = self._sash_drag
+        width = self._clamp_panel(width0 - (e.x_root - x0) / scale)
+        if width != self._panel_width:
+            self._apply_panel_width(width)
+
+    def _sash_release(self, _e=None):
+        if self._sash_drag is None:
+            return
+        self._sash_drag = None
+        self._sash_grip.configure(fg_color=BORDER)
+        hardware.set_(automatico_panel_width=self._panel_width)
+
+    def _sash_reset(self, _e=None):
+        self._sash_drag = None
+        self._apply_panel_width(self._clamp_panel(PANEL_WIDTH))
+        hardware.set_(automatico_panel_width=self._panel_width)
+
     def _build_trims_panel(self, panel, *, row: int):
         """Sección RECORTES: heurística de silencios, revisión para la AI y corte final.
         Nada de esto toca el video hasta «Cortar y exportar»."""
@@ -441,7 +524,8 @@ class AutomaticWorkspace:
         self.trims_status = ctk.CTkLabel(box, text="Sin recortes. Analiza silencios o arrastra "
                                                    "en el carril «recortes» del timeline.",
                                          text_color=MUTED, anchor="w", justify="left",
-                                         wraplength=246, font=ctk.CTkFont(size=10))
+                                         wraplength=max(140, self._panel_width - 48),
+                                         font=ctk.CTkFont(size=10))
         self.trims_status.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         buttons = ctk.CTkFrame(box, fg_color="transparent")
         buttons.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 4))
@@ -495,6 +579,7 @@ class AutomaticWorkspace:
     def _on_media_loaded(self, info, fingerprint):
         self.layers.store = None
         self.layers.selected = None
+        self.layers.sync_detail()
         self._last_layers_stamp = None
         self._last_topics_stamp = None
         self.info, self.fingerprint = info, fingerprint

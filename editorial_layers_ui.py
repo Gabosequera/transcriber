@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import bisect
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -13,6 +14,130 @@ import editorial_trims
 from editorial_io import parse_time, format_time
 
 
+def _font(size, **options):
+    """Copia de la fuente por defecto de Tk con otro tamaño/peso. La barra dibuja en
+    un canvas crudo (como el timeline), así que no pasa por el escalado de CTk."""
+    font = tkfont.nametofont("TkDefaultFont").copy()
+    font.configure(size=size, **options)
+    return font
+
+
+def _rounded(canvas, x1, y1, x2, y2, radius, *, fill, outline):
+    """Rectángulo redondeado con primitivas exactas (el canvas no tiene una propia y
+    el polígono suavizado deja el borde irregular): relleno en cruz + 4 sectores,
+    borde de 4 arcos + 4 líneas de 1 px."""
+    radius = min(radius, (x2 - x1) / 2, (y2 - y1) / 2)
+    d = 2 * radius
+    corners = ((x1, y1, 90), (x2 - d, y1, 0), (x2 - d, y2 - d, 270), (x1, y2 - d, 180))
+    canvas.create_rectangle(x1 + radius, y1, x2 - radius, y2, fill=fill, width=0)
+    canvas.create_rectangle(x1, y1 + radius, x2, y2 - radius, fill=fill, width=0)
+    for cx, cy, start in corners:
+        canvas.create_arc(cx, cy, cx + d, cy + d, start=start, extent=90, style="pieslice",
+                          fill=fill, width=0)
+    for cx, cy, start in corners:
+        canvas.create_arc(cx, cy, cx + d, cy + d, start=start, extent=90, style="arc",
+                          outline=outline)
+    canvas.create_line(x1 + radius, y1, x2 - radius, y1, fill=outline)
+    canvas.create_line(x1 + radius, y2, x2 - radius, y2, fill=outline)
+    canvas.create_line(x1, y1 + radius, x1, y2 - radius, fill=outline)
+    canvas.create_line(x2, y1 + radius, x2, y2 - radius, fill=outline)
+
+
+class LayerDetailBar:
+    """Barra de detalle del item de capa: UNA línea de altura constante bajo el
+    timeline (fila libre del editor) con el item bajo el mouse o, si no hay, el
+    seleccionado — color de origen/capa, capa, etiqueta, estado, tramos y el
+    comentario para la AI recortado con «…» al ancho real. Dibuja en un canvas
+    propio, así que cambiar el texto nunca altera el layout (antes el detalle iba
+    al status del pie, que hacía wrap y movía timeline y preview con cada hover)."""
+
+    COLORS = dict(bg="#111513", surface="#181d1a", raised="#202622", border="#303833",
+                  muted="#8b9790", text="#eef3ef", text_soft="#c6cec9")
+    STATES = {"proposed": ("PROPUESTO", "#c9974e"), "accepted": ("ACEPTADO", "#35a978"),
+              "disabled": ("DESACTIVADO", "#8b9790")}
+    ORIGINS = {"silence": "#527cad", "ai": "#9471bd", "user": "#c58e43"}
+    HINT = "doble click edita · X activa/desactiva · Supr borra"
+    EMPTY = ("Capas · pasa el mouse por un item del timeline para ver su detalle · "
+             "arrastra en un carril para crear uno")
+
+    def __init__(self, parent, *, row, colors=None, column=0, padx=4, pady=(0, 4)):
+        self.colors = {**self.COLORS, **(colors or {})}
+        self.f_label = _font(10, weight="bold")
+        self.f_text = _font(10)
+        self.f_small = _font(8)
+        self.f_badge = _font(8, weight="bold")
+        self.f_italic = _font(10, slant="italic")
+        self.height = max(30, self.f_label.metrics("linespace") + 14)
+        self.canvas = tk.Canvas(parent, height=self.height, bg=self.colors["bg"],
+                                highlightthickness=0)
+        self.canvas.grid(row=row, column=column, sticky="ew", padx=padx, pady=pady)
+        self.canvas.bind("<Configure>", lambda e: self._draw())
+        self._key = None
+        self._current = None
+
+    def show(self, layer, item, *, selected=False):
+        key = (layer["layer_id"], item["item_id"], item["state"], item["label"], item["comment"],
+               item.get("origin"), item.get("parent_id"),
+               tuple((r["t_ini"], r["t_fin"]) for r in item["ranges"]), bool(selected))
+        if key != self._key:
+            self._key = key
+            self._current = (layer, item, bool(selected))
+            self._draw()
+
+    def clear(self):
+        if self._key is not None:
+            self._key = self._current = None
+            self._draw()
+
+    def _draw(self):
+        canvas, colors = self.canvas, self.colors
+        canvas.delete("all")
+        width, height = canvas.winfo_width(), self.height
+        if width < 40:
+            return
+        _rounded(canvas, .5, .5, width - .5, height - .5, 6,
+                 fill=colors["surface"], outline=colors["border"])
+        cy = height / 2
+        x = 12
+        if self._current is None:
+            self._text(x, cy, self.EMPTY, self.f_text, colors["muted"], width - x - 12)
+            return
+        layer, item, selected = self._current
+        color = self.ORIGINS.get(item.get("origin")) or layer.get("color") or colors["muted"]
+        canvas.create_oval(x, cy - 5, x + 10, cy + 5, fill=color,
+                           outline="#ffffff" if selected else color, width=2 if selected else 1)
+        x += 18
+        x = self._text(x, cy, layer["name"].upper(), self.f_small, colors["muted"], width * .18) + 8
+        label = ("↳ " if item.get("parent_id") else "") + (item["label"] or "(sin etiqueta)")
+        x = self._text(x, cy, label, self.f_label, colors["text"], width * .3) + 10
+        badge, badge_color = self.STATES.get(item["state"], (str(item["state"]).upper(), colors["muted"]))
+        badge_width = self.f_badge.measure(badge) + 14
+        _rounded(canvas, x, cy - 8, x + badge_width, cy + 8, 8,
+                 fill=colors["raised"], outline=badge_color)
+        canvas.create_text(x + badge_width / 2, cy, text=badge, fill=badge_color, font=self.f_badge)
+        x += badge_width + 10
+        x = self._text(x, cy, layers.ranges_summary(item["ranges"]), self.f_text,
+                       colors["muted"], width * .3) + 12
+        right = width - 12
+        hint_width = self.f_small.measure(self.HINT)
+        if right - x > hint_width + 180:
+            canvas.create_text(right, cy, text=self.HINT, anchor="e", fill=colors["muted"],
+                               font=self.f_small)
+            right -= hint_width + 16
+        comment = " ".join((item["comment"] or "").split())
+        if comment:
+            self._text(x, cy, comment, self.f_text, colors["text_soft"], right - x)
+        else:
+            self._text(x, cy, "sin comentario para la AI", self.f_italic, colors["muted"], right - x)
+
+    def _text(self, x, cy, text, font, fill, max_width):
+        text = layers.elide(font.measure, text, max_width)
+        if not text:
+            return x
+        self.canvas.create_text(x, cy, text=text, anchor="w", fill=fill, font=font)
+        return x + font.measure(text)
+
+
 class LayersController:
     def __init__(self, workspace):
         self.w = workspace
@@ -20,6 +145,7 @@ class LayersController:
         self.selected = None  # layer_id, item_id, segment
         self.drag = None
         self.window = None
+        self.detail = None    # LayerDetailBar del dueño (opcional)
         self._cache_key = None
         self._cache = []
         self._draw_indexes = {}
@@ -131,6 +257,7 @@ class LayersController:
             if phase == "doble":
                 self.edit_dialog()
             editor.redibujar()
+            self.sync_detail()
             return True
         if phase == "motion" and self.drag:
             self.drag["now"] = t
@@ -246,6 +373,7 @@ class LayersController:
         self.snapshot()
         self.w._refresh_plan_buttons()
         editor.refrescar_layout()
+        self.sync_detail()
 
     def keys(self, e):
         if not self.selected or not self.selected[1]:
@@ -265,11 +393,35 @@ class LayersController:
             elif e.keysym == "Escape":
                 self.selected = None
                 self.w.editor.redibujar()
+                self.sync_detail()
             else:
                 return False
         except Exception as error:
             self.w.editor.status(str(error))
         return True
+
+    def sync_detail(self, hovered=None):
+        """Refleja en la barra de detalle el item bajo el mouse (`hovered` = (capa,
+        item)) o, si no hay, el seleccionado; sin ninguno muestra la ayuda. Nunca
+        toca el status del pie: su wrap cambiaba la altura y movía todo el layout."""
+        if self.detail is None:
+            return
+        if hovered is None and self.store and self.selected and self.selected[1]:
+            try:
+                layer, item = self.find(*self.selected[:2])
+            except StopIteration:
+                item = None
+            hovered = (layer, item) if item else None
+        if hovered is None:
+            self.detail.clear()
+            return
+        layer, item = hovered
+        self.detail.show(layer, item, selected=bool(
+            self.selected and self.selected[:2] == (layer["layer_id"], item["item_id"])))
+
+    def leave(self, _e=None):
+        self.w.editor.tl.delete("layer-tooltip")
+        self.sync_detail()
 
     def hover(self, e):
         if not self.store:
@@ -278,11 +430,12 @@ class LayersController:
         canvas.delete("layer-tooltip")
         hit = self.w.editor._carril_en(e.y)
         g = self.w.editor._tl_geo()
+        hovered = None
         if hit and g:
             item_hit = self.hit(hit[0]["nombre"], e.x, g)
             if item_hit:
                 item = item_hit[0]
-                self.w.editor.status(f"{item['label']} · {len(item['ranges'])} tramo(s) · {item['comment']} · doble click para editar")
+                hovered = (self.find(hit[0]["nombre"])[0], item)
                 x = max(5, min(e.x, canvas.winfo_width() - 260))
                 text = canvas.create_text(x + 5, max(2, e.y - 55), text=(
                     item['label'] + ' · ' + item['state'] + '\n' + item['comment'])[:400],
@@ -292,6 +445,7 @@ class LayersController:
                     bg = canvas.create_rectangle(bbox[0]-4,bbox[1]-3,bbox[2]+4,bbox[3]+3,
                                                  fill="#252d28", outline="#637368", tags="layer-tooltip")
                     canvas.tag_lower(bg, text)
+        self.sync_detail(hovered)
 
     def menu(self, e):
         hit = self.w.editor._carril_en(e.y)
@@ -302,6 +456,7 @@ class LayersController:
         if not item_hit:
             return
         self.selected = (hit[0]["nombre"], item_hit[0]["item_id"], item_hit[1])
+        self.sync_detail()
         menu = tk.Menu(self.w.editor.tl, tearoff=False)
         menu.add_command(label="Editar comentario y rangos", command=self.edit_dialog)
         from types import SimpleNamespace

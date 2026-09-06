@@ -303,6 +303,12 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   todo apagado pasa por `wizard._stop_preview()`; los `available()` de análisis usan
   find_spec y NO deben importar torch/transformers (arranque de la GUI).
 - **Código vivo**: la GUI no recarga .py — reiniciar la app tras editar.
+- **El layout del editor no se mueve con texto**: el pie de `EditorMedios` tiene
+  altura FIJA (dos renglones; lo que no entra se recorta) y el detalle del item
+  de capa bajo el mouse va a `LayerDetailBar` (canvas de altura constante en la
+  fila 4 de `editor.f`, libre para el dueño). Nunca escribir texto de hover en
+  `editor.status()`: el wrap cambiaba la altura del pie y el timeline y el preview
+  (filas elásticas) saltaban con cada movimiento del mouse.
 
 ## 6. Cómo verificar (headless)
 
@@ -336,6 +342,18 @@ Las capas manuales están disponibles antes de inferir mediante un contexto de
 medio que nunca se publica como master. Al aparecer la metadata real se adoptan
 por fingerprint. Las eliminaciones de items y descendientes quedan protegidas
 frente a respuestas AI posteriores, además de las correcciones y capas borradas.
+
+### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
+
+El pie de estado del editor tiene altura fija y su wrap sigue al ancho real de la
+ventana. El detalle del item de capa (color de origen/capa, capa, etiqueta, estado,
+tramos y comentario recortado con «…») vive en `LayerDetailBar`, una barra de altura
+constante entre el timeline y el status; sin mouse encima muestra el item
+seleccionado o la ayuda. El panel derecho de Automático se redimensiona arrastrando
+el divisor (mínimo 292 = ancho inicial, el editor conserva 620 px; doble click
+restaura; el ancho se guarda en `config.json` como `automatico_panel_width`).
+Los helpers de texto (`clock`, `ranges_summary`, `elide`) son puros y viven en
+`editorial_layers.py` para que los tests no necesiten Tk ni CustomTkinter.
 
 ### Reproductor — objetivo E
 

@@ -26,7 +26,9 @@ Contrato con el dueño (wizard / tab Marcar):
     soltar y el playhead no se mueve;  `teclas_extra(e)` → True si el dueño
     consumió la tecla (se consulta ANTES que las marcas);  `on_video_cargado(info,
     fp)` — tras la inspección, ANTES de armar pistas;  `on_playhead(t)` — cambio
-    del playhead. Los cambios de MARCAS se
+    del playhead. La columna 4 del transporte y la fila 4 de `self.f` (entre el
+    timeline y el status, que tiene altura FIJA) quedan libres para widgets del
+    dueño (chk_conf del wizard; barra de detalle de capas de Automático). Los cambios de MARCAS se
     observan suscribiéndose al Registro compartido (Registro.suscribir) — no hay
     hook propio (review impl r1.7: un solo canal, sin duplicados).
 """
@@ -216,15 +218,29 @@ class EditorMedios:
             row=0, column=3, padx=(0, 12))
         self.f_marca.grid_remove()             # aparece con la selección
 
+        # (la fila 4 de self.f queda LIBRE para un widget del dueño — la barra de
+        #  detalle de capas de Automático va ahí, entre el timeline y el status)
+
         # ---- status (línea de estado del editor) + reasociación ----
-        pie = ctk.CTkFrame(self.f, fg_color="transparent")
-        pie.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 6))
+        # Altura FIJA (dos renglones): el texto cambia todo el tiempo (carga,
+        # progreso, reproducción) y si el pie creciera o encogiera con cada mensaje,
+        # el timeline y el preview (filas elásticas) saltarían. Lo que no entra se
+        # recorta abajo; nunca empuja el layout.
+        self._status_wrap_w = 0
+        pie = ctk.CTkFrame(self.f, fg_color="transparent",
+                           height=2 * ctk.CTkFont().metrics("linespace") + 4)
+        pie.grid(row=5, column=0, sticky="ew", padx=10, pady=(0, 6))
+        pie.grid_propagate(False)
         pie.grid_columnconfigure(0, weight=1)
+        pie.grid_rowconfigure(0, weight=1)
         self.lbl_status = ctk.CTkLabel(pie, text="Elegí el video: se detectan las pistas "
                                                  "y se arma el timeline.",
-                                       text_color="gray60", anchor="w", justify="left",
+                                       text_color="gray60", anchor="nw", justify="left",
                                        wraplength=680)
-        self.lbl_status.grid(row=0, column=0, sticky="ew")
+        self.lbl_status.grid(row=0, column=0, sticky="nsew")
+        # el wrap sigue al ancho real de la celda (ventana ancha → un renglón; angosta
+        # → no desborda), con umbral para no realimentar <Configure> por píxel
+        self.lbl_status.bind("<Configure>", self._status_wrap)
         # botón de REASOCIACIÓN (impl h.5): aparece solo si el sidecar es de otro video;
         # 2 clicks — el primero muestra el conteo (consenso r2 q.1), el segundo ejecuta
         self.btn_reasociar = ctk.CTkButton(pie, text="Reasociar marcas a este video",
@@ -243,6 +259,12 @@ class EditorMedios:
         self.btn_adoptar.grid_remove()
 
         self.f.after(80, self._pump)
+
+    def _status_wrap(self, _e=None):
+        w = max(200, self.lbl_status.winfo_width() - 8)
+        if abs(w - self._status_wrap_w) > 12:
+            self._status_wrap_w = w
+            self.lbl_status.configure(wraplength=w)
 
     # ============================================================ API pública ----
     def status(self, m):

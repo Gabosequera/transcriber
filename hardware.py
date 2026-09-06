@@ -61,6 +61,8 @@ _DEFAULTS = {
     # modelo de Whisper por defecto en TODAS las pestañas (Transcribir, Automático, wizard).
     # large-v3-turbo: calidad de large con velocidad muy superior. Se cambia en Ajustes.
     "whisper_model": "large-v3-turbo",
+    # ancho del panel derecho de Automático (se cambia arrastrando el divisor)
+    "automatico_panel_width": 292,
     # keys de APIs online: viven SOLO acá (config.json, por-máquina) — nunca en
     # presets, spec, manifests ni en el zip de ship.
     "openrouter_api_key": "",   # visión VLM + descripción de audio multi-vendor

@@ -35,6 +35,47 @@ def new_item(start, end, label="Tramo", comment=""):
                 state="proposed", edited=True, parent_id=None, ranges=[dict(t_ini=start, t_fin=end)])
 
 
+# ---- texto para la UI (puro: la barra de detalle del timeline lo usa y los tests
+#      lo cubren sin Tk) ----
+def clock(seconds):
+    """m:ss.d, o h:mm:ss.d a partir de la hora (compacto, como el reloj del transporte)."""
+    seconds = max(0.0, float(seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours >= 1:
+        return f"{int(hours)}:{int(minutes):02d}:{secs:04.1f}"
+    return f"{int(minutes)}:{secs:04.1f}"
+
+
+def ranges_summary(ranges):
+    """«0:12.0 – 0:40.5 · 28.5 s», «1:02.0 · punto» o «3 tramos · 0:12.0 – 5:40.5 · 41.0 s»."""
+    start = min(r["t_ini"] for r in ranges)
+    end = max(r["t_fin"] for r in ranges)
+    total = sum(r["t_fin"] - r["t_ini"] for r in ranges)
+    if len(ranges) == 1:
+        if end - start < .0005:
+            return f"{clock(start)} · punto"
+        return f"{clock(start)} – {clock(end)} · {total:.1f} s"
+    return f"{len(ranges)} tramos · {clock(start)} – {clock(end)} · {total:.1f} s"
+
+
+def elide(measure, text, max_width):
+    """Recorta `text` con «…» para que entre en `max_width` píxeles según `measure`
+    (normalmente `font.measure`). Sin lugar ni para la elipsis devuelve ''."""
+    if max_width is None or measure(text) <= max_width:
+        return text
+    if measure("…") > max_width:
+        return ""
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if measure(text[:middle] + "…") <= max_width:
+            low = middle
+        else:
+            high = middle - 1
+    return text[:low].rstrip() + "…"
+
+
 def validate_items(items, duration, *, allow_points=False):
     if not isinstance(items, list):
         raise ValueError("items debe ser una lista")
