@@ -421,7 +421,15 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
 - Diseño agente-app (2026-07-16): aprobado, sin implementar.
 - Diferidos: batching de inferencia (HALLAZGOS-futuros.md), semillas del índice
   desde eventos VLM, torch-GPU en Windows junto a whisper.
-# 2026-09-06 — Proyectos modulares (sesión en curso)
+# 2026-09-06 — Proyectos modulares, capas, temas y reproductor (0.3.0)
+
+Entrega de los cinco objetivos en commits separados, seguida de revisión de
+compatibilidad y preparación de release 0.3.0. Suite final: 75 tests; smoke Tk con
+exportación multipista, reimportación automática del hijo, silencios sin inferencia,
+dos pasadas de temas, edición/borrado, marcas antes de transcribir y playback real.
+Las capas comunes sustituyen los gestos propios de recortes: doble click abre el
+editor; X y menú cambian estado. Los avisos de bordes de las propuestas siguen en
+sus diagnósticos JSON; el carril común usa color de origen/estado/selección.
 
 Objetivo E: reproducción ligada al reloj de salida de FFplay y cachés de navegación.
 VOD Windows de 2 h 59 min: desfase mediano medido 1,19–1,44 s → 20–24 ms;

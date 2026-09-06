@@ -137,13 +137,37 @@ def main():
         app.update()
         assert workspace.editor.t_play == nav
         assert workspace.view_button.cget("state") == "normal"
+        # Playback real del hijo: el avance nace del reloj de audio, no del spawn.
+        workspace.editor._set_playhead(1)
+        workspace.editor._play()
+        spin(lambda: workspace.editor.repro.position() is not None and workspace.editor.t_play > 1.4)
+        workspace.editor._stop_preview()
+        # Un clip sin inferencia conserva el mismo editor de marcas y capas.
+        raw=root/'sin-procesar.mkv'
+        subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',
+                        '-metadata','comment=sin-procesar-'+root.name,str(raw)],
+                        check=True,**medios.flags_subprocess())
+        workspace.editor.cargar(str(raw))
+        spin(lambda: workspace.info and workspace.info['path']==str(raw) and workspace.layers.store is not None)
+        assert workspace.layers.store.master['schema']=='editorial-layer-context/1'
+        controller=workspace.layers
+        layer=controller.store.save(layers.new_layer(controller.store.master,'Antes de transcribir'))
+        controller.persist(layer['layer_id'],layers.new_item(1,2,comment='Pedido previo'),create=True)
+        controller.persist('autor',layers.new_item(2,3,comment='Marca previa'),create=True)
+        assert controller.all()[0]['items'][-1]['comment']=='Marca previa'
+        workspace.editor.cargar(str(child))
+        spin(lambda:workspace.result and Path(workspace.result['master'])==exported/entry['project_master'])
         assert "torch" not in sys.modules and "transformers" not in sys.modules
         print("SMOKE UI OK: App real, importación, metadata, carriles, salto y zoom; sin modelos.", flush=True)
         if args.hold:
             app.mainloop()
     finally:
         workspace.cerrar()
-        app.destroy()
+        import tkinter
+        try:
+            app.destroy()
+        except tkinter.TclError:
+            pass  # --hold puede haber terminado por el cierre normal de la ventana.
 
 
 if __name__ == "__main__":

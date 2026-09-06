@@ -21,7 +21,7 @@ El flujo principal debe:
 3. detectar risas;
 4. medir arousal e intensidad vocal;
 5. combinar cronológicamente el texto de todas las pistas de voz;
-6. separar semánticamente la grabación en 3–4 chunks macro;
+6. separar semánticamente la grabación en chunks macro de hasta 50 minutos;
 7. analizar después cada chunk con más detalle para encontrar momentos prometedores.
 
 El objetivo inicial no es editar el video automáticamente. Es reducir tres horas de
@@ -52,7 +52,7 @@ compatibles con Linux para desarrollo y para el futuro coordinador.
 #### Fase 1B — Chunking macro con el agente
 
 - Codex CLI recibe una sola conversación cronológica con todas las pistas de voz.
-- Codex lee la grabación completa y propone 3–4 chunks semánticos globales.
+- Codex lee la grabación completa y propone chunks semánticos globales de hasta 50 minutos.
 - La aplicación refina cada límite contra palabras, risas e intervenciones de todas
   las pistas dentro de una ventana de búsqueda acotada.
 - Validar cobertura completa, orden y ausencia de huecos o solapes accidentales.
@@ -331,9 +331,10 @@ consultan bajo demanda desde el master.
 
 ### 9.1 Objetivo
 
-Separar una grabación de unas tres horas en **3–4 chunks semánticos grandes**. El tamaño
-esperado es aproximadamente 35–70 minutos, pero el contenido manda y no se imponen
-divisiones uniformes.
+Separar la grabación en **chunks semánticos de hasta 50 minutos** (objetivo: hasta
+45 minutos). No existe cantidad fija ni se imponen divisiones uniformes. Esta es
+la regla vigente del validador y la skill; reemplaza el texto anterior de 3–4
+partes de hasta 70 minutos, que ya contradecía al código.
 
 ### 9.2 Evidencia utilizada
 
@@ -546,7 +547,7 @@ Con un video cercano a tres horas y dos pistas seleccionadas:
 - los solapes reales se conservan;
 - el bleed evidente no aparece duplicado en la vista limpia y queda auditado;
 - el master valida y permite reanudar una corrida interrumpida;
-- Codex propone 3–4 chunks después de leer la conversación global completa;
+- Codex propone chunks de hasta 50 minutos después de leer la conversación global completa;
 - cada frontera definitiva evita palabras y risas de todas las pistas o registra por
   qué no pudo evitar una intervención dentro del radio permitido;
 - cada carpeta de chunk contiene transcript y señales de ambas pistas;

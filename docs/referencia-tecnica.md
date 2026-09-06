@@ -297,8 +297,8 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
 - **Paths = localizadores**: la identidad de un medio SIEMPRE es el fingerprint
   (size+hash_muestreado+inventario). Los videos de Gabriel se MUEVEN de carpeta
   después de extraer (Windows/OneDrive) — toda feature nueva debe tolerar eso.
-- **config.json es por máquina** (hardware, calibración de mirada, API keys,
-  `av_offset_s` del preview) — no se copia entre PCs ni va en el ship zip.
+- **config.json es por máquina** (hardware, calibración de mirada, API keys) — no se
+  copia entre PCs ni va en el ship zip. `av_offset_s` antiguo se ignora.
 - **Reproductor del preview** (§3.1): NO volver al esquema de un ffmpeg por frame;
   todo apagado pasa por `wizard._stop_preview()`; los `available()` de análisis usan
   find_spec y NO deben importar torch/transformers (arranque de la GUI).
@@ -327,6 +327,15 @@ de marcas), `python vistas.py generar|dossier <master>`,
 `python edl.py validar|render|cutview`.
 
 ## 7. Estado actual y pendientes
+
+La especificación antigua decía 3–4 bloques de hasta 70 minutos. Se corrigió a
+la regla que ya ejecutaban el validador y la skill: número variable, máximo 50
+minutos, objetivo hasta 45. No se cambió el algoritmo para esa corrección documental.
+
+Las capas manuales están disponibles antes de inferir mediante un contexto de
+medio que nunca se publica como master. Al aparecer la metadata real se adoptan
+por fingerprint. Las eliminaciones de items y descendientes quedan protegidas
+frente a respuestas AI posteriores, además de las correcciones y capas borradas.
 
 ### Reproductor — objetivo E
 

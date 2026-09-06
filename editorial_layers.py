@@ -18,10 +18,16 @@ RESERVED = {"autor", "bloques", "recortes", "CON", "PRN", "AUX", "NUL",
             *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
-def new_layer(master, name, *, kind="user", layer_id=None):
+def new_layer(master, name, *, kind="user", layer_id=None, master_digest=None):
     return dict(schema=SCHEMA, layer_id=layer_id or "layer-" + uuid.uuid4().hex[:12],
                 kind=kind, name=name, color="#d09947", media_fingerprint=identity(master["media"]["fingerprint"]),
-                source_master_digest=source_master_digest(master), revision=0, items=[])
+                source_master_digest=master_digest or source_master_digest(master), revision=0, items=[])
+
+
+def media_context(info, fingerprint):
+    """Contexto de edición previo al pipeline; nunca se publica como master inferido."""
+    return dict(schema="editorial-layer-context/1", media=dict(path=info["path"],
+                duration=info["duracion"], fingerprint=fingerprint), tracks={})
 
 
 def new_item(start, end, label="Tramo", comment=""):
@@ -66,6 +72,8 @@ def validate_items(items, duration, *, allow_points=False):
             if parent_id not in by_id or parent_id in visited:
                 raise ValueError("jerarquía de subtemas desconocida o cíclica")
             visited.add(parent_id)
+            if len(visited) > 32:
+                raise ValueError("jerarquía demasiado profunda (máximo 32 niveles)")
             parent_id = by_id[parent_id].get("parent_id")
         if item.get("parent_id"):
             parent = by_id[item["parent_id"]]
@@ -172,7 +180,16 @@ def merge_response(store, proposal, snapshot):
         if old.get("deleted"):
             raise ValueError("la capa fue borrada por el usuario")
         protected = {i["item_id"]: i for i in old["items"] if i.get("edited")}
-        layer["items"] = [dict(i, edited=False) for i in layer["items"] if i["item_id"] not in protected]
+        deleted = set(old.get("deleted_item_ids", []))
+        # Borrar un padre también protege sus descendientes propuestos.
+        while True:
+            descendants = {i["item_id"] for i in layer["items"] if i.get("parent_id") in deleted}
+            if descendants <= deleted:
+                break
+            deleted |= descendants
+        layer["deleted_item_ids"] = sorted(deleted)
+        layer["items"] = [dict(i, edited=False) for i in layer["items"]
+                          if i["item_id"] not in protected and i["item_id"] not in deleted]
         layer["items"].extend(protected.values())
         layer["revision"] = old["revision"]
     else:

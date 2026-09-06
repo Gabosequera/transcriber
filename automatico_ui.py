@@ -517,6 +517,14 @@ class AutomaticWorkspace:
         default = source.parent / source.stem
         self.output_entry.delete(0, "end")
         self.output_entry.insert(0, str(default))
+        # Las marcas y los pedidos manuales existen aun antes de transcribir.
+        import editorial_layers
+        try:
+            self.layers.store = editorial_layers.LayerStore(default / "editorial",
+                editorial_layers.media_context(info, fingerprint))
+        except (ValueError, OSError) as error:
+            self._append_log(f"No se pudieron abrir las capas previas: {error}")
+        self.editor.refrescar_layout()
         self.pipeline_title.configure(text="Selecciona las pistas de voz")
         self.run_button.configure(state="normal")
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
@@ -1167,7 +1175,8 @@ class AutomaticWorkspace:
         self._background(work)
 
     def _prepare_topics(self):
-        if not self.layers.store:
+        if not self.layers.store or not self._master_path():
+            self._append_log("Para analizar temas, abre o genera primero la metadata del medio.")
             return
         import editorial_topics
         scope = None

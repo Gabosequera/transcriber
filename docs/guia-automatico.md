@@ -96,15 +96,16 @@ editaste, lo que creaste y los que desactivaste.
 | Mover | Arrastrar el cuerpo |
 | Estirar o encoger | Arrastrar un borde del recorte seleccionado |
 | Crear uno tuyo | Arrastrar en una zona vacía del carril (queda en naranja) |
-| Activar / desactivar | `X`, doble click o menú contextual |
+| Activar / desactivar | `X` o menú contextual |
+| Editar comentario y rangos | Doble click |
 | Borrar | `Supr` / `Retroceso` |
 | Deseleccionar | `Esc` |
 | Ver el motivo | Pasar el mouse por encima (tooltip) |
-| Menú contextual | Click derecho: activar/desactivar, borrar, ir al inicio, ir al final, escuchar desde 2 s antes, crear un recorte de 1 s |
+| Menú contextual | Click derecho: editar, activar/desactivar, borrar, ir al inicio |
 
-Ayudas visuales: un **borde rojo** avisa que ese límite cae dentro de una palabra o una
-risa; la **proyección rayada** sobre las formas de onda muestra lo que se va; con muchos
-recortes en pantalla el carril pasa a un modo denso por píxel. **Saltar recortes al
+Ayudas visuales: color por origen, borde blanco en la selección y contorno punteado
+para items desactivados. Con muchos recortes se agrupan marcas indistinguibles por
+píxel. **Saltar recortes al
 reproducir** hace que la reproducción salte los tramos activos (re-arranca la sesión al
 final de cada recorte; es una ayuda de revisión, no el render).
 
@@ -274,6 +275,9 @@ Opciones de `run`: `--model` (Whisper), `--language`, `--device auto|cpu|cuda`,
 ## Atajos del timeline
 
 **Capas y comentarios** crea, renombra, cambia el color o elimina capas propias.
+Puedes dejar marcas y pedidos antes de transcribir; se guardan en
+`<nombre-del-video>/editorial/layers/` y se conservan al generar la metadata allí.
+Para analizar temas hace falta el transcript del proyecto.
 En cada carril arrastra en vacío para crear un rango, arrastra cuerpo/bordes para
 moverlo/estirarlo y usa doble click para editar etiqueta, comentario, estado y lista
 de tramos. Un item con varios rangos se selecciona como unidad; cada tramo se puede

@@ -1,6 +1,6 @@
 ---
 name: transcriptor
-description: Analiza la metadata de voz de proyectos Transcriptor y genera (1) propuestas de cortes de podcasts por cambios de tema y (2) propuestas de recortes de contenido prescindible sobre bloques ya acortados, para revisar y aceptar en el timeline de la app.
+description: Analiza metadata de voz de Transcriptor y propone bloques, recortes y temas/subtemas recurrentes en dos pasadas, usando las capas y los pedidos del editor para revisión en el timeline.
 ---
 
 # Transcriptor: cortes por tema y recortes de contenido
@@ -18,7 +18,8 @@ Una respuesta específica a una capa usa `schema: editorial-layers-proposal/1`,
 completa (`editorial-layer/1`). Solo capas `user` y `topics` se responden por este
 contrato; bloques y recortes usan sus tareas específicas. Los items llevan
 `item_id`, `label`, `comment`, `state` (`proposed/accepted/disabled`), `ranges`
-con `t_ini/t_fin` y `parent_id` opcional. La app preserva correcciones humanas.
+con `t_ini/t_fin` y `parent_id` opcional. La app preserva correcciones humanas
+y no restaura items ni capas borrados; usa IDs estables entre revisiones.
 No escribas directamente en `layers/`, `trims.json` ni en el sidecar de marcas.
 
 ## Tarea 1 — Cortes de podcast por temas (bloques)

@@ -9,6 +9,34 @@ from test_projects import fixture
 
 
 class LayersTests(unittest.TestCase):
+    def test_manual_layer_before_pipeline_survives_real_master(self):
+        master = fixture()
+        context = layers.media_context(dict(path='video.mkv', duracion=12),master['media']['fingerprint'])
+        with tempfile.TemporaryDirectory() as tmp:
+            store = layers.LayerStore(tmp,context)
+            layer = layers.new_layer(context,'Pedido previo')
+            layer['items'] = [layers.new_item(1,2,comment='Busca el contexto después de transcribir')]
+            store.save(layer)
+            loaded = layers.LayerStore(tmp,master)
+            self.assertEqual(loaded.visible()[0]['items'],layer['items'])
+            self.assertNotEqual(loaded.source_digest,store.source_digest)
+
+    def test_ai_cannot_restore_deleted_items_or_their_children(self):
+        master=fixture()
+        with tempfile.TemporaryDirectory() as tmp:
+            store=layers.LayerStore(tmp,master)
+            layer=layers.new_layer(master,'Temas')
+            parent=layers.new_item(0,3)
+            child=layers.new_item(1,2)
+            child['parent_id']=parent['item_id']
+            layer['deleted_item_ids']=[parent['item_id']]
+            saved=store.save(layer)
+            snapshot=layers.write_snapshot(tmp,master,store.visible())
+            response=dict(schema=layers.PROPOSAL,source_master_digest=snapshot['source_master_digest'],
+                          source_layers_digest=snapshot['source_layers_digest'],
+                          layer={**saved,'items':[parent,child]})
+            self.assertEqual(layers.merge_response(store,response,snapshot)['items'],[])
+
     def test_roundtrip_revision_and_external_conflict(self):
         master = fixture()
         with tempfile.TemporaryDirectory() as tmp:

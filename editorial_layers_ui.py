@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import bisect
 import tkinter as tk
 from tkinter import messagebox
 
@@ -21,6 +22,7 @@ class LayersController:
         self.window = None
         self._cache_key = None
         self._cache = []
+        self._draw_indexes = {}
 
     def all(self):
         if not self.store:
@@ -33,7 +35,22 @@ class LayersController:
             self._cache_key=key
             self._cache=layers.adapters(self.store.master, plan=self.w.plan, trims=self.w.trims,
                                        marks=reg.marcas if reg else []) + self.store.visible()
+            self._draw_indexes = {}
+            for layer in self._cache:
+                entries=sorted(((r['t_ini'],r['t_fin'],item,index)
+                    for item in layer['items'] for index,r in enumerate(item['ranges'])),key=lambda r:r[0])
+                maximum=-1
+                ends=[]
+                for _,end,_,_ in entries:
+                    maximum=max(maximum,end)
+                    ends.append(maximum)
+                self._draw_indexes[layer['layer_id']]=(entries,[r[0] for r in entries],ends)
         return self._cache
+
+    def visible_parts(self, layer, start, end):
+        entries,starts,ends=self._draw_indexes[layer['layer_id']]
+        return [(item,index) for a,b,item,index in entries[
+            bisect.bisect_left(ends,start):bisect.bisect_right(starts,end)] if b>=start]
 
     def snapshot(self):
         return layers.write_snapshot(self.store.root, self.store.master, self.all(),master_digest=self.store.source_digest)
@@ -52,15 +69,24 @@ class LayersController:
         editor = self.w.editor
         start, span = editor.view
         canvas.create_rectangle(g[0], y, sum(g), y + 34, fill="#191f1c", outline="#343c37")
-        for item in layer["items"]:
+        parts=self.visible_parts(layer,start,start+span)
+        occupied=set()
+        for item, index in parts:
             selected = self.selected and self.selected[:2] == (layer["layer_id"], item["item_id"])
-            for part in item["ranges"]:
+            for part in [item["ranges"][index]]:
                 if part["t_fin"] < start or part["t_ini"] > start + span:
                     continue
                 a, b = [editor._t2x(max(start, min(start + span, part[k])), g) for k in ("t_ini", "t_fin")]
                 b = max(a + 3, b)
                 color = ({"silence": "#527cad", "ai": "#9471bd", "user": "#c58e43"}.get(item.get("origin"))
                          or layer["color"])
+                # LOD por píxel: nunca oculta la selección, ni multiplica miles de
+                # rectángulos indistinguibles cuando se ve un VOD completo.
+                if len(parts)>400 and not selected:
+                    key=(int(a),int(b),color,item['state'])
+                    if key in occupied:
+                        continue
+                    occupied.add(key)
                 canvas.create_rectangle(a, y + 12, b, y + 31,
                     fill=color if item["state"] != "disabled" else "",
                     outline="#ffffff" if selected else color, width=2 if selected else 1,
@@ -142,6 +168,8 @@ class LayersController:
 
     def persist(self, lid, item, *, create=False, delete=False):
         # Trabajar sobre copias; el guardado fallido no modifica los documentos vivos.
+        if self.w.worker and self.w.worker.is_alive():
+            raise ValueError("espera a que termine la operación del proyecto")
         editor = self.w.editor
         layers.validate_items([dict(item, parent_id=None)], self.store.master["media"]["duration"], allow_points=lid=="autor")
         item = copy.deepcopy(item)
@@ -157,9 +185,14 @@ class LayersController:
                 reg.borrar(mark)
             elif create:
                 mark = reg.agregar_region(a, b, decision=decision, prompt=item["comment"])
+                reg.editar(mark,label=item['label'])
                 item["item_id"] = mark["id"]
             elif a == b:
-                reg.editar(mark, t=a, prompt=item["comment"], label=item["label"])
+                if decision is not None:
+                    reg.a_region(mark)
+                    reg.editar(mark,prompt=item["comment"],label=item["label"],decision=decision)
+                else:
+                    reg.editar(mark, t=a, prompt=item["comment"], label=item["label"])
             else:
                 reg.editar(mark, tipo="region", t_ini=a, t_fin=b, decision=decision,
                            prompt=item["comment"], label=item["label"])
@@ -205,6 +238,7 @@ class LayersController:
                         break
                     removed |= children
                 layer["items"] = [i for i in layer["items"] if i["item_id"] not in removed]
+                layer["deleted_item_ids"] = sorted(set(layer.get("deleted_item_ids", [])) | removed)
             else:
                 layer["items"] = [item if i["item_id"] == item["item_id"] else i for i in layer["items"]]
             self.store.save(layer)
@@ -345,8 +379,10 @@ class LayersController:
             self.w.editor.refrescar_layout()
         def action(mode):
             try:
+                if self.w.worker and self.w.worker.is_alive():
+                    raise ValueError("espera a que termine la operación del proyecto")
                 if mode == "new":
-                    layer = layers.new_layer(self.store.master, name.get().strip())
+                    layer = layers.new_layer(self.store.master, name.get().strip(), master_digest=self.store.source_digest)
                 else:
                     if not listing.curselection():
                         return

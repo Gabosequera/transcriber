@@ -105,8 +105,10 @@ def validate(proposal, master, request, snapshot, *, previous=None):
             for index, r in enumerate(item["ranges"]):
                 lower, upper = a, b
                 if item.get("parent_id"):
-                    parent = next(p for p in by_id[item["parent_id"]]["ranges"]
-                                  if p["t_ini"] <= r["t_ini"] and p["t_fin"] >= r["t_fin"])
+                    parent = next((p for p in by_id[item["parent_id"]]["ranges"]
+                                  if p["t_ini"] <= r["t_ini"] and p["t_fin"] >= r["t_fin"]), None)
+                    if parent is None:
+                        raise ValueError("el ajuste del tema padre deja un subtema fuera; revisa sus bordes")
                     lower, upper = parent["t_ini"], parent["t_fin"]
                 if index:
                     lower = max(lower, item["ranges"][index-1]["t_fin"])
