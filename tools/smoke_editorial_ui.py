@@ -85,6 +85,30 @@ def main():
             store.delete(layer['layer_id'])
             workspace.editor.refrescar_layout()
             assert not any(l['layer_id']==layer['layer_id'] for l in controller.all())
+            if hasattr(workspace, '_prepare_topics'):
+                controller.selected=None
+                workspace._prepare_topics()
+                request=editorial_io.read_json(store.root/'views/topics-request.json')
+                first=dict(schema='editorial-topics-proposal/1',request_id=request['request_id'],
+                    source_master_digest=request['source_master_digest'],source_layers_digest=request['source_layers_digest'],
+                    complete=True,items=[layers.new_item(0,.8,'Tema'),layers.new_item(9.2,12,'Retorno')],**{'pass':1})
+                path=editorial_io.atomic_write_json(store.root/'views/topics.proposed.json',first)
+                workspace._import_topics(path)
+                spin(lambda: not workspace.worker.is_alive())
+                app.update()
+                previous=editorial_io.read_json(store.root/'views/topics-pass1.json')
+                unified=layers.new_item(0,1,'Tema recurrente smoke')
+                unified['ranges']=[r for i in previous['items'] for r in i['ranges']]
+                unified['source_item_ids']=[i['item_id'] for i in previous['items']]
+                second={**first,'pass':2,'previous_pass_digest':editorial_io.digest_json(previous),'items':[unified]}
+                editorial_io.atomic_write_json(path,second)
+                workspace._import_topics(path)
+                spin(lambda:any(l['kind']=='topics' for l in store.visible()))
+                topic=next(l for l in store.visible() if l['kind']=='topics')
+                assert len(topic['items'][0]['ranges'])==2
+                topic['items'][0]['comment']='Recurrencia revisada a mano'
+                controller.persist(topic['layer_id'],topic['items'][0])
+                assert layers.LayerStore(store.root,data).layers[topic['layer_id']]['items'][0]['edited']
         workspace.editor._set_playhead(8)
         workspace.editor._zoom(2)
         app.update()

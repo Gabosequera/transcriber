@@ -395,6 +395,11 @@ intervención o una risa relevante.
 
 ## 10. Materialización y análisis profundo por chunk
 
+El análisis de temas/subtemas usa dos pasadas obligatorias: mapa cronológico completo
+y relectura global para unificar recurrencias. La segunda referencia el mapa validado
+por digest y conserva todos sus tramos. Un tema recurrente es un item lógico con
+varios rangos, con subtemas contenidos y corrección humana. La app no decide temas.
+
 Después de aprobar los límites se generan vistas con slices de ambas pistas:
 
 ```text

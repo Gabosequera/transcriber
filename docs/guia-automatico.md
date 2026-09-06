@@ -166,6 +166,14 @@ exportar: siempre se exporta desde el video que tienes cargado.
 
 ## Archivos del proyecto
 
+**Analizar temas (dos pasadas)** prepara la Tarea 3 de la skill. Con un bloque
+seleccionado analiza ese bloque; sin selección analiza todo el medio. Entrega a tu
+AI `views/topics-agent-request.md`: su primera respuesta produce `topics-pass1.json`
+y una solicitud actualizada; su segunda respuesta unifica recurrencias en una capa
+de temas/subtemas con varios rangos por tema. Ambos JSON se importan automáticamente.
+Doble click en el item permite corregir rangos y `parent_id`. Para repetir el bucle
+con tus correcciones, pulsa otra vez Analizar temas. Las respuestas antiguas se rechazan.
+
 ```text
 <proyecto>/editorial/
   <nombre>.editorial.master.json   # metadata combinada, tiempos absolutos del video

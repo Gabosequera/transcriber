@@ -328,6 +328,15 @@ de marcas), `python vistas.py generar|dossier <master>`,
 
 ## 7. Estado actual y pendientes
 
+### Temas — objetivo C
+
+`editorial_topics.py`: petición con ámbito, ID de ciclo y digests de master/capas.
+Primera pasada ajustada ≤1,5 s contra palabras y risas; segunda ligada al digest del
+mapa y con cobertura exacta de sus IDs fuente. Recurrencias en un item multirrango,
+jerarquía validada, publicación como capa; correcciones humanas preservadas.
+`topics.proposed.json` detectado por el poll de la UI. 66 tests, incluidos orden de
+pasadas, recurrencia, respuestas incompletas/obsoletas y tiempos no finitos.
+
 ### Capas — objetivo B
 
 `editorial_layers.py` define `editorial-layer/1`, almacenamiento con revisión,

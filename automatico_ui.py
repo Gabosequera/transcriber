@@ -234,6 +234,7 @@ class AutomaticWorkspace:
         from editorial_layers_ui import LayersController
         self.layers = LayersController(self)
         self._last_layers_stamp = None
+        self._last_topics_stamp = None
         self.info = None
         self.fingerprint = None
         self.track_widgets: list[dict] = []
@@ -401,6 +402,8 @@ class AutomaticWorkspace:
         self.layers_button.grid(row=13, column=0, sticky="ew", padx=14, pady=5)
         ctk.CTkButton(panel, text="Preparar capas para AI", command=self._prepare_layers).grid(
             row=14, column=0, sticky="ew", padx=14, pady=5)
+        ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
+            row=15, column=0, sticky="ew", padx=14, pady=5)
 
     def _build_trims_panel(self, panel, *, row: int):
         """Sección RECORTES: heurística de silencios, revisión para la AI y corte final.
@@ -493,6 +496,7 @@ class AutomaticWorkspace:
         self.layers.store = None
         self.layers.selected = None
         self._last_layers_stamp = None
+        self._last_topics_stamp = None
         self.info, self.fingerprint = info, fingerprint
         self.result = None
         self.plan = None
@@ -680,6 +684,10 @@ class AutomaticWorkspace:
                     self.layers.snapshot()
                     self.editor.refrescar_layout()
                     self._append_log("Propuesta de capa importada; revisa sus tramos en el timeline.")
+                elif kind == "topics_imported":
+                    self._background_done()
+                    self.editor.refrescar_layout()
+                    self._append_log(event["message"])
                 elif kind == "review_written":
                     self._review_stale = False
                     self._background_done()
@@ -726,6 +734,7 @@ class AutomaticWorkspace:
             self._poll_proposal(views / "trims.proposed.json", "_last_trims_stamp",
                                 self._import_trims)
             self._poll_proposal(views / "layers.proposed.json", "_last_layers_stamp", self._import_layers)
+            self._poll_proposal(views / "topics.proposed.json", "_last_topics_stamp", self._import_topics)
         self.f.after(100, self._pump)
 
     def _poll_proposal(self, path: Path, attribute: str, action):
@@ -792,6 +801,8 @@ class AutomaticWorkspace:
             self._import_trims(Path(path))
         elif schema == "editorial-layers-proposal/1":
             self._import_layers(Path(path))
+        elif schema == "editorial-topics-proposal/1":
+            self._import_topics(Path(path))
         else:
             self._import_plan(Path(path))
 
@@ -1110,6 +1121,32 @@ class AutomaticWorkspace:
         def work():
             editorial_layers.merge_response(self.layers.store, read_json(path), snapshot)
             self.events.put({"tipo": "layers_imported"})
+        self._background(work)
+
+    def _prepare_topics(self):
+        if not self.layers.store:
+            return
+        import editorial_topics
+        scope = None
+        if self.layers.selected and self.layers.selected[0] == "bloques" and self.layers.selected[1]:
+            _, item = self.layers.find(*self.layers.selected[:2])
+            scope = item["ranges"][0]
+        snapshot = self.layers.snapshot()
+        editorial_topics.prepare(self.layers.store.root,self.layers.store.master,snapshot,scope=scope)
+        self._last_topics_stamp = None
+        self._append_log("Tarea 3 lista: views/topics-agent-request.md. "
+                         + ("Ámbito: bloque seleccionado." if scope else "Ámbito: medio completo.")
+                         + " Pide a la AI ambas pasadas; la app valida el mapa entre ellas.")
+
+    def _import_topics(self, path):
+        if not self.layers.store:
+            return
+        import editorial_topics
+        snapshot = self.layers.snapshot()
+        store = self.layers.store
+        def work():
+            result = editorial_topics.import_proposal(store, read_json(path), snapshot)
+            self.events.put({"tipo":"topics_imported", **result})
         self._background(work)
 
     def _on_playhead(self, t: float):
