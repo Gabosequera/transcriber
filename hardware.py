@@ -63,6 +63,8 @@ _DEFAULTS = {
     "whisper_model": "large-v3-turbo",
     # ancho del panel derecho de Automático (se cambia arrastrando el divisor)
     "automatico_panel_width": 292,
+    # formato de salida al exportar cortes (clave de podcast_export.FORMATS)
+    "export_format": "h264",
     # keys de APIs online: viven SOLO acá (config.json, por-máquina) — nunca en
     # presets, spec, manifests ni en el zip de ship.
     "openrouter_api_key": "",   # visión VLM + descripción de audio multi-vendor

@@ -355,6 +355,16 @@ restaura; el ancho se guarda en `config.json` como `automatico_panel_width`).
 Los helpers de texto (`clock`, `ranges_summary`, `elide`) son puros y viven en
 `editorial_layers.py` para que los tests no necesiten Tk ni CustomTkinter.
 
+**Formatos de salida** (`podcast_export.FORMATS`, selector «Salida» del panel, clave
+persistida en `config.json` como `export_format`): `h264` (por defecto, sin cambios),
+`hevc` (x265 CRF 22, `hvc1`), `prores` (prores_ks 422 HQ 10 bits + PCM 24 en `.mov`) y
+`copy` (`-c copy`). La copia mueve cada límite entre bloques al fotograma clave anterior
+(`keyframe_before` = seek por índice con `ffprobe -read_intervals T%+#1`, en el reloj
+del contenedor: `t0 + t_proyecto`), compartido por ambos bloques; los hijos y
+`exports.json` (`t_ini`, `requested_t_ini`, `shift_seconds`, `format`) llevan el corte
+REAL. Rechaza recortes (unir segmentos exige recodificar). El id de carpeta incluye el
+formato salvo para `h264`, así una exportación previa conserva su nombre.
+
 ### Reproductor — objetivo E
 
 Reloj de salida de FFplay, warm-up sin audio prematuro, preview 30 fps/tick 16 ms,

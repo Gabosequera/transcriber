@@ -466,3 +466,10 @@ arrastrando el divisor (doble click restaura 292; el ancho se guarda en
 `config.json`). 77 tests y smoke Tk con capturas: el timeline no se mueve con
 textos largos ni con el hover; el divisor cambia el ancho, respeta el mínimo y
 persiste.
+
+Misma sesión, después: selector **Salida** para los dos botones de exportación
+(H.264, HEVC, ProRes 422 HQ y copia exacta sin recodificar). La copia conserva el
+códec y la calidad del original y mueve cada límite entre bloques al fotograma
+clave anterior, compartido por ambos bloques; el log informa el desplazamiento y
+los hijos heredan el corte real. Motivación: footage raw o intra debe salir
+idéntico, solo cortado. 79 tests (copia con GOP de 1 s, ProRes y HEVC reales).

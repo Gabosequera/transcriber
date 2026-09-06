@@ -404,25 +404,56 @@ class AutomaticWorkspace:
                                           hover_color="#2a322d", command=self._import_external_json)
         self.agent_button.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 6))
         self._build_trims_panel(panel, row=9)
+        # Formato de salida: vale para los dos botones de exportación; se recuerda.
+        export_row = ctk.CTkFrame(panel, fg_color="transparent")
+        export_row.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 2))
+        export_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(export_row, text="Salida", text_color="#c6cec9", anchor="w",
+                     font=ctk.CTkFont(size=12)).grid(row=0, column=0, sticky="ew")
+        self.format_menu = ctk.CTkOptionMenu(
+            export_row, values=[spec["label"] for spec in podcast_export.FORMATS.values()],
+            width=196, height=26, font=ctk.CTkFont(size=11), dynamic_resizing=False,
+            command=self._format_changed)
+        saved = hardware.load().get("export_format")
+        if saved not in podcast_export.FORMATS:
+            saved = podcast_export.DEFAULT_FORMAT
+        self.format_menu.set(podcast_export.FORMATS[saved]["label"])
+        self.format_menu.grid(row=0, column=1, sticky="e")
+        self.format_help = ctk.CTkLabel(panel, text=podcast_export.FORMATS[saved]["help"],
+                                        text_color=MUTED, anchor="w", justify="left",
+                                        wraplength=max(140, self._panel_width - 48),
+                                        font=ctk.CTkFont(size=10))
+        self.format_help.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.accept_button = ctk.CTkButton(panel, text="Aceptar y exportar cortes", height=32,
                                            state="disabled", fg_color=ACCENT,
                                            command=self._accept_cuts)
-        self.accept_button.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.accept_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.open_project_button = ctk.CTkButton(panel, text="Abrir proyecto existente", height=28,
                                                 fg_color=SURFACE_RAISED,
                                                 command=self._open_project)
-        self.open_project_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.open_project_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.run_button = ctk.CTkButton(panel, text="Procesar pistas de voz", height=38,
                                         state="disabled", fg_color=ACCENT,
                                         hover_color=ACCENT_HOVER, command=self._run_or_cancel,
                                         font=ctk.CTkFont(size=13, weight="bold"))
-        self.run_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 14))
+        self.run_button.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 14))
         self.layers_button = ctk.CTkButton(panel, text="Capas y comentarios", command=self.layers.manage)
-        self.layers_button.grid(row=13, column=0, sticky="ew", padx=14, pady=5)
+        self.layers_button.grid(row=15, column=0, sticky="ew", padx=14, pady=5)
         ctk.CTkButton(panel, text="Preparar capas para AI", command=self._prepare_layers).grid(
-            row=14, column=0, sticky="ew", padx=14, pady=5)
+            row=16, column=0, sticky="ew", padx=14, pady=5)
         ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
-            row=15, column=0, sticky="ew", padx=14, pady=5)
+            row=17, column=0, sticky="ew", padx=14, pady=5)
+
+    # ---- formato de salida ----
+    def _export_format(self) -> str:
+        label = self.format_menu.get()
+        return next((key for key, spec in podcast_export.FORMATS.items() if spec["label"] == label),
+                    podcast_export.DEFAULT_FORMAT)
+
+    def _format_changed(self, _label=None):
+        fmt = self._export_format()
+        self.format_help.configure(text=podcast_export.FORMATS[fmt]["help"])
+        hardware.set_(export_format=fmt)
 
     # ---- divisor arrastrable entre el editor y el panel derecho ----
     def _build_sash(self, body):
@@ -457,7 +488,8 @@ class AutomaticWorkspace:
     def _apply_panel_width(self, width: int):
         self._panel_width = width
         self.panel.configure(width=width)
-        self.trims_status.configure(wraplength=max(140, width - 48))
+        for label in (self.trims_status, self.format_help):
+            label.configure(wraplength=max(140, width - 48))
 
     def _sash_leave(self, _e=None):
         if self._sash_drag is None:
@@ -1017,6 +1049,7 @@ class AutomaticWorkspace:
         if not self.plan or not self.info:
             return
         master, plan, source = self._master_path(), self.plan, self.info["path"]
+        fmt = self._export_format()
         output = dialogs.open_dir("Carpeta para los videos cortados", remember="podcast_exports")
         if not output:
             return
@@ -1024,7 +1057,7 @@ class AutomaticWorkspace:
         self.pipeline_title.configure(text="Exportando cortes…")
         def work():
             with editorial_pipeline._RunLock(master.parent / ".work"):
-                destination = podcast_export.export_plan(master, plan, source, output,
+                destination = podcast_export.export_plan(master, plan, source, output, fmt=fmt,
                     cancel=self.cancel, progress_cb=lambda fraction: self.events.put(
                         {"tipo": "overall", "fraction": fraction}),
                     log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
@@ -1220,6 +1253,12 @@ class AutomaticWorkspace:
         if not editorial_trims.stats(self.trims)["enabled"]:
             messagebox.showinfo("Sin recortes activos", "Activa o crea al menos un recorte.")
             return
+        fmt = self._export_format()
+        if fmt == "copy":
+            messagebox.showinfo("Copia exacta", "La copia sin recodificar no puede aplicar recortes: "
+                                "elige otro formato de salida, o usa «Aceptar y exportar cortes» "
+                                "para partir en bloques sin recortar.")
+            return
         master, plan, trims, source = self._master_path(), self.plan, self.trims, self.info["path"]
         output = dialogs.open_dir("Carpeta para los videos recortados", remember="podcast_exports")
         if not output:
@@ -1234,7 +1273,7 @@ class AutomaticWorkspace:
         def work():
             with editorial_pipeline._RunLock(master.parent / ".work"):
                 destination = podcast_export.export_plan(
-                    master, plan, source, output, trims=trims, cancel=self.cancel,
+                    master, plan, source, output, trims=trims, fmt=fmt, cancel=self.cancel,
                     progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
                     log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
             self.events.put({"tipo": "export_done", "path": str(destination)})

@@ -152,6 +152,24 @@ carpetas a medias. La velocidad depende de la resolución, la duración y la CPU
 
 **Aceptar y exportar cortes** (botón inferior) hace lo mismo sin aplicar recortes.
 
+El selector **Salida** (encima del botón, se recuerda entre sesiones) elige el formato de
+los dos botones:
+
+| Salida | Qué hace | Cuándo usarla |
+|---|---|---|
+| H.264 (compatible) | Recodifica (x264 CRF 20, AAC 192 kb/s), corte exacto | Por defecto: subir, compartir |
+| HEVC (más pequeño) | Recodifica (x265 CRF 22), corte exacto | Mitad de tamaño; varias veces más lento en CPU |
+| ProRes 422 HQ (edición) | Recodifica a 10 bits en `.mov`, audio PCM 24 bits | Seguir editando en Premiere/Resolve; archivos muy grandes |
+| Copia exacta (sin recodificar) | Copia los streams tal cual, muy rápido | Footage raw/intra o cuando la calidad debe ser la del original |
+
+La copia exacta conserva el códec, el contenedor y la calidad byte a byte, pero solo puede
+empezar en un fotograma clave: cada límite entre bloques se mueve al clave anterior y lo
+comparten los dos bloques (ni hueco ni solape); el log dice cuánto se movió y los proyectos
+hijos heredan el tiempo real. Con originales intra (ProRes, DNxHR, raw, MJPEG) todo fotograma
+es clave y el corte es exacto; con OBS (clave cada 2 s por defecto) se mueve como mucho 2 s.
+No puede aplicar recortes: unir segmentos exige recodificar. Sin video, todos los formatos
+producen `.m4a` AAC salvo la copia, que conserva el original.
+
 ## 6. Volver a un proyecto
 
 Las exportaciones nuevas incluyen `projects/001/editorial/001.editorial.master.json`

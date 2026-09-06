@@ -157,6 +157,76 @@ class PodcastExportTests(unittest.TestCase):
                 podcast_export.export_plan(master_path, plan, source, root / "canceladas", cancel=cancel)
             self.assertEqual(list((root / "canceladas").iterdir()), [])
 
+    @staticmethod
+    def _source_with_gop(root, name, gop):
+        source = root / name
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=96x64:rate=25:duration=6", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=6", "-map", "0:v", "-map", "1:a",
+                        "-c:v", "libx264", "-g", str(gop), "-keyint_min", str(gop),
+                        "-sc_threshold", "0", "-c:a", "aac", str(source)],
+                       check=True, **medios.flags_subprocess())
+        info = medios.inspeccionar(source)
+        master = {"media": {"duration": info["duracion"], "fingerprint": medios.fingerprint(source, info)},
+                  "conversation": {"utterances": [], "clean_utterance_ids": []}, "tracks": {}}
+        return source, info, editorial_io.atomic_write_json(root / "master.json", master), master
+
+    def test_copy_mode_keeps_codec_and_moves_boundaries_to_keyframes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, info, master_path, master = self._source_with_gop(root, "original.mp4", 25)
+            plan = plan_for(master, [0, 2.32, info["duracion"]])
+            output = podcast_export.export_plan(master_path, plan, source, root / "out", fmt="copy")
+            exports = editorial_io.read_json(output / "exports.json")
+            self.assertEqual(exports["format"], "copy")
+            first, second = exports["files"]
+            # El límite pedido (2.32) cae al fotograma clave anterior (2.0), compartido.
+            self.assertAlmostEqual(second["t_ini"], 2.0, delta=0.05)
+            self.assertEqual(first["t_fin"], second["t_ini"])
+            self.assertAlmostEqual(second["shift_seconds"], 0.32, delta=0.05)
+            for entry in (first, second):
+                exported = medios.inspeccionar(output / entry["file"])
+                self.assertTrue(entry["file"].endswith(".mp4"))
+                self.assertEqual(exported["video"]["codec"], "h264")
+                self.assertEqual(exported["pistas"][0]["codec"], "aac")
+                self.assertAlmostEqual(exported["duracion"], entry["t_fin"] - entry["t_ini"], delta=0.15)
+            # El hijo hereda el tiempo REAL del corte, no el pedido.
+            child = editorial_io.read_json(output / second["project_master"])
+            self.assertAlmostEqual(child["derivation"]["segments"][0]["source_ini"], 2.0, delta=0.05)
+            # El mismo plan en H.264 va a otra carpeta (otro id), sin chocar con la copia.
+            plain = podcast_export.export_plan(master_path, plan, source, root / "out")
+            self.assertNotEqual(plain, output)
+            self.assertEqual(medios.inspeccionar(plain / "002.mp4")["video"]["codec"], "h264")
+            import editorial_trims
+            trims = editorial_trims.new_document(master["media"]["fingerprint"], info["duracion"])
+            editorial_trims.add_cut(trims, 1.0, 1.5)
+            with self.assertRaisesRegex(ValueError, "recortes"):
+                podcast_export.export_plan(master_path, plan, source, root / "out2", fmt="copy", trims=trims)
+            with self.assertRaisesRegex(ValueError, "desconocido"):
+                podcast_export.export_plan(master_path, plan, source, root / "out3", fmt="vhs")
+
+    def test_reencoding_formats_cut_exactly(self):
+        encoders = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True,
+                                  text=True, **medios.flags_subprocess()).stdout
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, info, master_path, master = self._source_with_gop(root, "original.mkv", 150)
+            plan = plan_for(master, [0, 2.32, info["duracion"]])
+            for fmt, encoder, codec, extension in (("prores", "prores_ks", "prores", "mov"),
+                                                   ("hevc", "libx265", "hevc", "mp4")):
+                if f" {encoder} " not in encoders:
+                    continue
+                output = podcast_export.export_plan(master_path, plan, source, root / "out", fmt=fmt)
+                exports = editorial_io.read_json(output / "exports.json")
+                self.assertEqual(exports["format"], fmt)
+                self.assertEqual(exports["files"][1]["t_ini"], 2.32)
+                exported = medios.inspeccionar(output / f"002.{extension}")
+                self.assertEqual(exported["video"]["codec"], codec)
+                self.assertAlmostEqual(exported["duracion"], info["duracion"] - 2.32, delta=0.1)
+                if fmt == "prores":
+                    self.assertEqual(exported["video"]["pix_fmt"], "yuv422p10le")
+                    self.assertEqual(exported["pistas"][0]["codec"], "pcm_s24le")
+
     def test_failed_encoder_never_publishes_partial_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
