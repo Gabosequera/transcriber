@@ -358,7 +358,31 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
 
 ---
 
+## 2026-09-06 — Primer uso real de la instalación Windows (release 0.2.0)
+
+- Gabriel instaló el paquete administrado (`transcriptor-installer-v0.2.0`) en su PC
+  (RTX 4070 Laptop). Dos bloqueos del mundo real, arreglados y verificados en la app
+  instalada:
+  (1) la app no arrancaba: el launcher dejaba `__pycache__` dentro de la release y la
+  verificación exacta contra el manifiesto lo rechazaba (`bootstrap.py -B` +
+  verificación tolerante al arrancar / estricta al instalar);
+  (2) la alineación MMS moría al descargar el modelo: sin consola (`pythonw`) tqdm
+  escribía en `sys.stderr = None` → `app._ensure_std_streams()` redirige a
+  `shared/logs/salida.log`.
+- Reanudar repetía TODA la transcripción: Whisper+MMS era un paso único. Ahora
+  `whisper_X` y `align_X` son pasos separados con checkpoint propio; manifests viejos
+  adoptados; diálogo «Retomar / Empezar de cero» al reanudar con trabajo previo.
+- `large-v3-turbo` pasa a ser el modelo por defecto (configurable en Ajustes) y el panel
+  «Pipeline editorial» de Automático permite elegir modelo y desmarcar MMS, risa o
+  intensidad+emoción por corrida.
+- `actualizar-release.bat` para reinstalar la release desde el código fuente; tests
+  ampliados (pasos omitidos + adopción legacy + Whisper una sola vez). 41 tests OK.
+
+---
+
 ## Pendientes al cierre de este período
+
+- Primera corrida editorial completa con el VOD real en Windows y publicar `v0.2.1`.
 
 - Detector de risas: filtro por confianza (falsos positivos con contenido real).
 - Primer VOD real con visión activada (iterar prompts v2 con contenido real).

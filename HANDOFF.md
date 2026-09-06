@@ -1,5 +1,11 @@
 # HANDOFF — Transcriptor / pipeline de metadata para auto-clipping
 
+> **Actualización 2026-09-06:** primer uso real de la instalación administrada en la PC
+> Windows (release 0.2.0). Arreglados el arranque (bytecode en la release) y la alineación
+> MMS bajo `pythonw`; Whisper y MMS son pasos separados y reanudables; `large-v3-turbo` es
+> el modelo por defecto (Ajustes); pasos opcionales marcables en Automático; aviso
+> retomar/reescribir al reanudar. Detalle en §7 y en `AUTOCLIP_HANDOFF.md`.
+>
 > **Actualización 2026-08-29:** el modo Automático ahora implementa el pipeline
 > editorial multipista de Fase 1 en `editorial_pipeline.py`. Este documento describe
 > principalmente el pipeline multimodal Manual heredado. La especificación vigente del
@@ -8,8 +14,8 @@
 > los comandos históricos de Codex documentados más abajo para reviews de desarrollo.
 
 Referencia técnica del ESTADO ACTUAL para que otro agente continúe.
-Última reescritura completa: 2026-07-20; última actualización: 2026-07-22 (pestaña
-«Marcar»: revisión post-extracción + guion para la IA). El historial cronológico
+Última reescritura completa: 2026-07-20; última actualización: 2026-09-06 (instalación
+Windows real: arranque, MMS, reanudación y ajustes del perfil editorial). El historial cronológico
 (qué se hizo, cuándo y por qué) vive en `AUTOCLIP_HANDOFF.md`. Originales
 pre-reescritura en `docs-archivo/`.
 
@@ -301,6 +307,48 @@ de marcas), `python vistas.py generar|dossier <master>`,
 `python edl.py validar|render|cutview`.
 
 ## 7. Estado actual y pendientes
+
+### 7.0 Sesión 2026-09-06 — instalación Windows real (release 0.2.0)
+
+Hecho en la PC de Gabriel (RTX 4070 Laptop 8 GB, 32 hilos, 63 GB RAM), verificado con la
+app instalada (`run.bat`) y con `tests/` (41 OK):
+
+- **Arranque roto** («la release instalada no coincide con su manifiesto (sobran:
+  `__pycache__/...`)»): el launcher importaba `release_state`/`updater` y Python escribía
+  bytecode dentro de `releases/0.2.0`, y la verificación exacta lo rechazaba. Fix doble:
+  `bootstrap.py` lanza el launcher con `-B` + `PYTHONDONTWRITEBYTECODE`, y
+  `updater.verify_installed_release` ignora `__pycache__`/`.pyc` al arrancar
+  (`strict=False`); al instalar sigue estricto (`strict=True`) → repara y deja la release limpia.
+- **MMS fallaba** («'NoneType' object has no attribute 'write'»): con `pythonw` no hay
+  consola y `sys.stdout/stderr` son `None`; tqdm (descarga de torch.hub) muere al escribir.
+  `app._ensure_std_streams()` redirige ambos a `shared/logs/salida.log` (rota a 5 MB,
+  `TQDM_MININTERVAL=5`). El modelo MMS ya quedó en `shared/cache/torch`.
+- **Reanudar repetía Whisper**: el paso `transcribe_X` (Whisper+MMS) era atómico; si MMS
+  fallaba se descartaba todo. Ahora `whisper_X` publica `tracks/X/words.whisper.json` +
+  `utterances.whisper.json` en cuanto termina y `align_X` (MMS o copia si está desmarcado)
+  produce `words.aligned.json` + `utterances.json`. `core.align_transcription()` alinea
+  in place (recién transcrito o cargado de JSON). Los manifests viejos `transcribe_X` se
+  adoptan como `align_X` (`_StepStore.peek(legacy_ids=…)`, misma clave) sin repetir nada.
+- **Aviso al reanudar** (`automatico_ui.ResumeDialog`): si la carpeta tiene manifests
+  (`editorial_pipeline.completed_work`), pregunta «Retomar con lo ya hecho» /
+  «Empezar de cero (reescribir)» (`spec.rebuild=True`) / Cancelar.
+- **Modelo por defecto `large-v3-turbo`**: `config.whisper_model` (Ajustes → bloque
+  Whisper; `hardware.whisper_model()`), lo siguen Transcribir, Automático y el wizard.
+  `hardware_whisper_suggestion()` conserva la heurística por hardware solo como sugerencia.
+- **Pasos marcables en Automático** (`spec.steps`: `align`, `laughter`, `prosody`; todos
+  activos por defecto): casillas en el panel «Pipeline editorial» + selector de modelo.
+  Un paso desmarcado se emite como `skipped` («OMITIDO»); el master tolera pistas sin
+  risa/arousal/intensidad (`editorial_master._optional_json`) y usa `words.aligned.json`
+  cuando no hay prosodia. CLI: `--no-align/--no-laughter/--no-prosody`, `--model` opcional.
+- `actualizar-release.bat`: reconstruye + reinstala la release desde el código fuente sin
+  descargar nada (mismos pasos 3-4 de `setup-windows.ps1`). Cerrar la app antes.
+- `.gitignore`: `state/` (instalación administrada).
+
+Pendiente de esta sesión: primera corrida editorial completa con el VOD real (Whisper
+correrá una vez más porque las corridas fallidas no alcanzaron a publicar; después todo se
+reutiliza); publicar tag `v0.2.1` para que el auto-update lo distribuya.
+
+### 7.1 Estado previo (2026-07-22)
 
 FUNCIONA de punta a punta: wizard -> pipeline (voz+fondo+cara+marcas+visión) ->
 master v2 -> vistas -> tab Marcar (metadata visible + marcas + guion + paquete) ->

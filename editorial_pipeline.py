@@ -68,7 +68,11 @@ def _validate_spec(spec: dict, info: dict) -> dict:
     identifiers = [item["track_id"] for item in tracks]
     if len(set(identifiers)) != len(identifiers):
         raise ValueError("los track_id deben ser únicos")
+    import hardware
     transcription = spec.get("transcription") or {}
+    steps = spec.get("steps") or {}
+    if not isinstance(steps, dict):
+        raise ValueError("steps debe ser un objeto")
     chunking = spec.get("chunking") or {}
     if not isinstance(chunking, dict):
         raise ValueError("chunking debe ser un objeto")
@@ -83,11 +87,19 @@ def _validate_spec(spec: dict, info: dict) -> dict:
         "project_dir": project_dir.expanduser().resolve(),
         "project_name": slug(str(spec.get("project_name") or source.stem)),
         "tracks": tracks,
+        # OJO: mismo orden de claves que las corridas anteriores → los manifests viejos de
+        # transcripción siguen siendo reutilizables (ver legacy_ids en el paso align).
         "transcription": {
-            "model": str(transcription.get("model", "medium")),
+            "model": str(transcription.get("model") or hardware.whisper_model()),
             "language": str(transcription.get("language", "es")),
             "device": str(transcription.get("device", "auto")),
-            "align": True,
+            "align": bool(steps.get("align", transcription.get("align", True))),
+        },
+        # pasos opcionales del perfil (todos marcados por defecto)
+        "steps": {
+            "align": bool(steps.get("align", transcription.get("align", True))),
+            "laughter": bool(steps.get("laughter", True)),
+            "prosody": bool(steps.get("prosody", True)),
         },
         "chunk_count": spec.get("chunk_count"),
         "chunking": {
@@ -101,16 +113,17 @@ def _validate_spec(spec: dict, info: dict) -> dict:
     }
 
 
-def _preflight() -> None:
+def _preflight(steps: dict | None = None) -> None:
     import align
     import laughter
 
+    steps = steps or {"align": True, "laughter": True, "prosody": True}
     missing = []
-    if not align.available():
+    if steps.get("align") and not align.available():
         missing.append("MMS/torchaudio")
-    if not prosodia.available():
+    if steps.get("prosody") and not prosodia.available():
         missing.append("prosodia (torch + transformers + librosa)")
-    if not laughter.available():
+    if steps.get("laughter") and not laughter.available():
         missing.append("detector de risa LaughterSegmentation")
     if missing:
         raise RuntimeError("Faltan dependencias del perfil editorial: " + ", ".join(missing))
@@ -205,16 +218,39 @@ class _StepStore:
                 return False
         return True
 
+    def peek(self, step_id: str, *, params: dict, dependencies: list[str], outputs: list[str],
+             reusable_if: Callable[[dict], bool] | None = None,
+             legacy_ids: tuple[str, ...] | list[str] = ()) -> dict | None:
+        """Manifest reutilizable del paso (sin ejecutar nada) o None. `legacy_ids`: nombres que
+        tuvo el mismo paso en versiones anteriores del pipeline; si uno sigue íntegro se adopta
+        bajo el nombre actual para no repetir inferencia ya hecha."""
+        key = self._key(params, dependencies)
+        previous = self.manifest(step_id)
+        candidates = [(step_id, previous)] + [(legacy, self.manifest(legacy)) for legacy in legacy_ids]
+        for name, manifest in candidates:
+            if self._reusable(manifest, key, outputs) and (reusable_if is None or reusable_if(manifest)):
+                if name != step_id:
+                    atomic_write_json(self._manifest_path(step_id), {**manifest, "step": step_id,
+                                                                     "adopted_from": name})
+                    _emit(self.event_cb, "log",
+                          message=f"Reutilizando {name} de una corrida anterior (ya estaba completo).")
+                return manifest
+        return None
+
+    def skip(self, step_id: str, label: str) -> None:
+        _emit(self.event_cb, "step", step=step_id, label=label, status="skipped")
+
     def run(self, step_id: str, label: str, *, params: dict, dependencies: list[str],
             outputs: list[str], action: Callable[[Path, Callable[[float], None]], dict | None],
             validate: Callable[[Path], None] | None = None,
-            reusable_if: Callable[[dict], bool] | None = None) -> dict:
+            reusable_if: Callable[[dict], bool] | None = None,
+            legacy_ids: tuple[str, ...] | list[str] = ()) -> dict:
         if self.cancel is not None and self.cancel.is_set():
             raise PipelineCancelled("pipeline cancelado")
         key = self._key(params, dependencies)
-        previous = self.manifest(step_id)
-        if self._reusable(previous, key, outputs) \
-                and (reusable_if is None or reusable_if(previous)):
+        previous = self.peek(step_id, params=params, dependencies=dependencies, outputs=outputs,
+                             reusable_if=reusable_if, legacy_ids=legacy_ids)
+        if previous is not None:
             _emit(self.event_cb, "step", step=step_id, label=label, status="reused")
             return previous
 
@@ -287,10 +323,39 @@ def _track_paths(root: Path, identifier: str) -> dict[str, Path]:
     folder = root / "tracks" / identifier
     return {
         "folder": folder, "audio": folder / "audio.flac",
+        "whisper_words": folder / "words.whisper.json",
+        "whisper_utterances": folder / "utterances.whisper.json",
         "aligned_words": folder / "words.aligned.json", "words": folder / "words.json",
         "utterances": folder / "utterances.json", "laughter": folder / "laughter.json",
         "arousal": folder / "arousal.json", "intensity": folder / "intensity.json",
     }
+
+
+STEP_LABELS = (("extract_", "Preparar pistas"), ("whisper_", "Whisper"),
+               ("transcribe_", "Whisper + MMS"), ("align_", "Alineación MMS"),
+               ("prosody_", "Intensidad + emoción"), ("laughter_", "Risa"),
+               ("master", "Metadata para AI externa"), ("chunk_plan", "Plan de chunks"),
+               ("chunks", "Chunks"))
+
+
+def completed_work(project_dir: str | Path) -> list[dict]:
+    """Pasos ya completados en un proyecto (manifests íntegros en editorial/.work/manifests).
+    Solo lectura; lo usa la UI para preguntar si retomar o empezar de cero."""
+    manifests = Path(project_dir) / "editorial" / ".work" / "manifests"
+    done = []
+    if not manifests.is_dir():
+        return done
+    for path in sorted(manifests.glob("*.json")):
+        try:
+            manifest = read_json(path)
+        except Exception:
+            continue
+        step = str(manifest.get("step") or path.stem)
+        label = next((label for prefix, label in STEP_LABELS if step.startswith(prefix)), step)
+        suffix = step.split("_", 1)[1] if "_" in step and not step.startswith("chunk") else ""
+        done.append({"step": step, "label": f"{label} · {suffix}" if suffix else label,
+                     "completed_at": manifest.get("completed_at")})
+    return done
 
 
 def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> dict:
@@ -317,7 +382,8 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
     _emit(event_cb, "log", message="Inspeccionando medio y timeline canónica…")
     info = medios.inspeccionar(source)
     resolved = _validate_spec(spec, info)
-    _preflight()
+    steps_enabled = resolved["steps"]
+    _preflight(steps_enabled)
     fingerprint = medios.fingerprint(resolved["source"], info)
     root = resolved["project_dir"] / "editorial"
     root.mkdir(parents=True, exist_ok=True)
@@ -325,7 +391,10 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
     with _RunLock(root / ".work"):
         store = _StepStore(root, fingerprint, rebuild=resolved["rebuild"],
                            cancel=cancel, event_cb=event_cb)
-        total_steps = len(resolved["tracks"]) * 4 + 3
+        per_track = 3 + int(steps_enabled["prosody"]) + int(steps_enabled["laughter"])
+        total_steps = len(resolved["tracks"]) * per_track + 1
+        if resolved["chunking"]["mode"] != "external":
+            total_steps += 2
         completed_steps = 0
 
         def completed() -> None:
@@ -350,48 +419,94 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
                       validate=_validate_audio)
             completed()
 
-        # 2. Whisper + MMS obligatorio por pista.
+        # 2. Whisper por pista como paso PROPIO (queda publicado en cuanto termina) y la
+        #    alineación MMS como paso aparte: si MMS falla o el proceso muere, al reanudar no se
+        #    repite la transcripción. Las corridas viejas (paso único transcribe_X) se adoptan.
+        whisper_params = {key: resolved["transcription"][key] for key in ("model", "language", "device")}
         for track in resolved["tracks"]:
             identifier = track["track_id"]
             paths = _track_paths(root, identifier)
+            raw_words_rel = f"tracks/{identifier}/words.whisper.json"
+            raw_utterances_rel = f"tracks/{identifier}/utterances.whisper.json"
             words_rel = f"tracks/{identifier}/words.aligned.json"
             utterances_rel = f"tracks/{identifier}/utterances.json"
+            align_step = dict(step_id=f"align_{identifier}", params=resolved["transcription"],
+                              dependencies=[f"extract_{identifier}"],
+                              outputs=[words_rel, utterances_rel],
+                              legacy_ids=[f"transcribe_{identifier}"])
+            align_label = (f"Alineación MMS · {identifier}" if steps_enabled["align"]
+                           else f"Timestamps de Whisper · {identifier}")
 
-            def transcribe_action(stage, progress, *, paths=paths, words_rel=words_rel,
-                                  utterances_rel=utterances_rel, identifier=identifier):
+            def whisper_action(stage, progress, *, paths=paths, identifier=identifier,
+                               raw_words_rel=raw_words_rel, raw_utterances_rel=raw_utterances_rel):
                 import core
                 destination = stage / f"tracks/{identifier}"
                 result = core.transcribe(
                     paths["audio"], destination, model_name=resolved["transcription"]["model"],
                     lang=resolved["transcription"]["language"],
                     device=resolved["transcription"]["device"], want_segments=True,
-                    want_srt=False, want_cues=False, want_align=True, align_required=True,
+                    want_srt=False, want_cues=False, want_align=False,
                     output_stem="", cancel=cancel,
                     log_cb=lambda message: _emit(event_cb, "log", message=message),
                     progress_cb=lambda fraction, eta=None: progress(fraction),
                 )
                 if result is None:
                     raise PipelineCancelled("transcripción cancelada")
-                os.replace(destination / "words.json", stage / words_rel)
-                os.replace(destination / "segments.json", stage / utterances_rel)
+                os.replace(destination / "words.json", stage / raw_words_rel)
+                os.replace(destination / "segments.json", stage / raw_utterances_rel)
                 return {key: result.get(key) for key in (
-                    "device", "duration", "language", "n_words", "n_segments", "aligned")}
+                    "device", "duration", "language", "n_words", "n_segments")}
 
-            store.run(f"transcribe_{identifier}", f"Whisper + MMS · {identifier}",
-                      params=resolved["transcription"], dependencies=[f"extract_{identifier}"],
-                      outputs=[words_rel, utterances_rel], action=transcribe_action,
-                      validate=_validate_json)
+            def align_action(stage, progress, *, paths=paths, words_rel=words_rel,
+                             utterances_rel=utterances_rel):
+                import core
+                words = read_json(paths["whisper_words"])
+                segments = read_json(paths["whisper_utterances"])
+                if steps_enabled["align"]:
+                    aligned = core.align_transcription(
+                        paths["audio"], words, segments, required=True, cancel=cancel,
+                        log_cb=lambda message: _emit(event_cb, "log", message=message),
+                        progress_cb=lambda fraction, eta=None: progress(fraction))
+                else:
+                    _emit(event_cb, "log", message="Alineación MMS desmarcada: se conservan los "
+                                                   "timestamps de Whisper.")
+                    for word in words:
+                        word.setdefault("alignment_source", "whisper")
+                    aligned = False
+                atomic_write_json(stage / words_rel, words)
+                atomic_write_json(stage / utterances_rel, segments)
+                progress(1.0)
+                return {"aligned": aligned, "n_words": len(words), "n_segments": len(segments)}
+
+            if store.peek(align_step["step_id"], params=align_step["params"],
+                          dependencies=align_step["dependencies"], outputs=align_step["outputs"],
+                          legacy_ids=align_step["legacy_ids"]) is None:
+                store.run(f"whisper_{identifier}", f"Whisper · {identifier}", params=whisper_params,
+                          dependencies=[f"extract_{identifier}"],
+                          outputs=[raw_words_rel, raw_utterances_rel], action=whisper_action,
+                          validate=_validate_json)
+            else:
+                _emit(event_cb, "step", step=f"whisper_{identifier}", label=f"Whisper · {identifier}",
+                      status="reused")
+            completed()
+            store.run(align_step["step_id"], align_label, params=align_step["params"],
+                      dependencies=align_step["dependencies"], outputs=align_step["outputs"],
+                      action=align_action, validate=_validate_json,
+                      legacy_ids=align_step["legacy_ids"])
             completed()
 
         import align
         align.unload()
 
-        # 3. Arousal e intensidad. El modelo permanece cargado entre pistas.
+        # 3. Arousal e intensidad (opcional). El modelo permanece cargado entre pistas.
         for track in resolved["tracks"]:
             identifier = track["track_id"]
             paths = _track_paths(root, identifier)
             outputs = [f"tracks/{identifier}/{name}" for name in
                        ("words.json", "arousal.json", "intensity.json", "emotions.json")]
+            if not steps_enabled["prosody"]:
+                store.skip(f"prosody_{identifier}", f"Arousal + intensidad · {identifier}")
+                continue
 
             def prosody_action(stage, progress, *, identifier=identifier, paths=paths, outputs=outputs):
                 aligned_words = read_json(paths["aligned_words"])
@@ -418,17 +533,21 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
                       params={"arousal_window": 4.0, "arousal_hop": 2.0,
                               "arousal_scope": "speech-regions/2-emotions",
                               "intensity": "word-mms/1"},
-                      dependencies=[f"extract_{identifier}", f"transcribe_{identifier}"],
+                      dependencies=[f"extract_{identifier}", f"align_{identifier}"],
                       outputs=outputs, action=prosody_action,
                       validate=_validate_json)
             completed()
-        prosodia.unload()
+        if steps_enabled["prosody"]:
+            prosodia.unload()
 
-        # 4. Risa frame-level. El modelo también se reutiliza entre pistas.
+        # 4. Risa frame-level (opcional). El modelo también se reutiliza entre pistas.
         for track in resolved["tracks"]:
             identifier = track["track_id"]
             paths = _track_paths(root, identifier)
             relative = f"tracks/{identifier}/laughter.json"
+            if not steps_enabled["laughter"]:
+                store.skip(f"laughter_{identifier}", f"Risa · {identifier}")
+                continue
 
             def laughter_action(stage, progress, *, paths=paths, relative=relative):
                 import laughter
@@ -456,19 +575,24 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
         base_master_relative = f".work/{resolved['project_name']}.editorial.base.json"
         view_outputs = [base_master_relative, "views/conversation.md", "views/conversation-signals.md",
                         "views/map.json", "views/chunk-agent-request.md"]
+        kinds = ["align"] + (["prosody"] if steps_enabled["prosody"] else []) \
+            + (["laughter"] if steps_enabled["laughter"] else [])
         dependencies = [f"{kind}_{track['track_id']}" for track in resolved["tracks"]
-                        for kind in ("transcribe", "prosody", "laughter")]
+                        for kind in kinds]
 
         def master_action(stage, progress):
             tracks = []
             for track in resolved["tracks"]:
                 paths = _track_paths(root, track["track_id"])
+                prosody_on, laughter_on = steps_enabled["prosody"], steps_enabled["laughter"]
                 tracks.append({
                     "track_id": track["track_id"], "stream_index": track["stream_index"],
                     "label": track["label"], "offset": track["media_track"].get("delta", 0.0),
-                    "words_path": paths["words"], "utterances_path": paths["utterances"],
-                    "laughter_path": paths["laughter"], "arousal_path": paths["arousal"],
-                    "intensity_path": paths["intensity"],
+                    "words_path": paths["words"] if prosody_on else paths["aligned_words"],
+                    "utterances_path": paths["utterances"],
+                    "laughter_path": paths["laughter"] if laughter_on else None,
+                    "arousal_path": paths["arousal"] if prosody_on else None,
+                    "intensity_path": paths["intensity"] if prosody_on else None,
                 })
             master = editorial_master.build_master(
                 media=info, tracks=tracks, project_name=resolved["project_name"],
@@ -483,7 +607,8 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
             progress(1.0)
             return {"tracks": len(tracks), "utterances": len(master["conversation"]["utterances"])}
 
-        store.run("master", "Master + conversación global", params={"schema": "editorial-master/1", "podcast": 2},
+        store.run("master", "Master + conversación global",
+                  params={"schema": "editorial-master/1", "podcast": 2, "steps": steps_enabled},
                   dependencies=dependencies, outputs=view_outputs, action=master_action)
         completed()
 
@@ -693,7 +818,7 @@ def main(argv=None) -> int:
     run_parser.add_argument("--track", action="append", required=True,
                             metavar="ÍNDICE=ETIQUETA",
                             help="pista de audio marcada como voz; se puede repetir")
-    run_parser.add_argument("--model", default="medium")
+    run_parser.add_argument("--model", default=None, help="Whisper (default: el de Ajustes)")
     run_parser.add_argument("--language", default="es")
     run_parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     run_parser.add_argument("--chunks", type=int, default=None)
@@ -704,6 +829,9 @@ def main(argv=None) -> int:
     run_parser.add_argument("--no-chunk-fallback", action="store_true",
                             help="fallar si Codex no está disponible")
     run_parser.add_argument("--rebuild", action="store_true")
+    run_parser.add_argument("--no-align", action="store_true", help="sin alineación MMS")
+    run_parser.add_argument("--no-laughter", action="store_true", help="sin detección de risa")
+    run_parser.add_argument("--no-prosody", action="store_true", help="sin intensidad + emoción")
     apply_parser = subcommands.add_parser("apply-chunks", help="validar y aplicar JSON del agente")
     apply_parser.add_argument("master")
     apply_parser.add_argument("document")
@@ -724,6 +852,8 @@ def main(argv=None) -> int:
         "transcription": {"model": arguments.model, "language": arguments.language,
                           "device": arguments.device},
         "chunk_count": arguments.chunks, "rebuild": arguments.rebuild,
+        "steps": {"align": not arguments.no_align, "laughter": not arguments.no_laughter,
+                  "prosody": not arguments.no_prosody},
         "chunking": {"mode": arguments.chunker, "model": arguments.codex_model,
                      "timeout_seconds": arguments.codex_timeout,
                      "fallback_local": not arguments.no_chunk_fallback},

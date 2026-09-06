@@ -140,6 +140,59 @@ def fmt_cue(t: float) -> str:
     return f"{int(t // 60):02d}:{t % 60:04.1f}"
 
 
+# ------------------------------------------------------------------ alignment --
+def align_transcription(audio, words: list[dict], segments: list[dict], *, required: bool = False,
+                        log_cb=None, progress_cb=None, cancel=None) -> bool:
+    """Corrige IN PLACE los start/end de `words` (y de los words/bordes de `segments`) con la
+    alineación forzada MMS. Sirve tanto recién transcrito como sobre un words.json/segments.json
+    cargados de disco (reanudar sin repetir Whisper). Devuelve True si se aplicó.
+    `required=True` → cualquier fallo es error (perfil editorial); si no, se conservan los
+    tiempos de Whisper y se avisa por log."""
+    def log(msg):
+        if log_cb:
+            log_cb(msg)
+
+    if not align.available():
+        if required:
+            raise RuntimeError("MMS es obligatorio para el perfil editorial, pero torchaudio no está disponible.")
+        log("⚠ MMS no está disponible; se conservan los timestamps de Whisper.")
+        return False
+    log("Corrigiendo timestamps con alineación forzada (MMS)… (más lento, la 1ª vez descarga el modelo)")
+    if progress_cb:
+        progress_cb(0.0, None)
+    try:
+        aligned = align.align_words(audio, words, log_cb=log, progress_cb=progress_cb, cancel=cancel)
+        fallback = sum(word.get("alignment_source") == "whisper_fallback" for word in aligned)
+        covered = sum(str(word.get("alignment_source", "")).startswith("mms") for word in aligned)
+        coverage = covered / max(1, len(aligned))
+        if required and fallback:
+            raise RuntimeError(f"MMS dejó {fallback} palabra(s) en fallback de Whisper")
+        for orig, new in zip(words, aligned):
+            orig["start"], orig["end"] = new["start"], new["end"]
+            orig["alignment_source"] = new.get("alignment_source")
+        # Recién transcrito, los dicts de cada segmento SON los de `words` (ya corregidos). Cargados
+        # de JSON son copias → se propagan por orden (misma secuencia de palabras en ambas salidas).
+        seg_words = [w for seg in segments for w in (seg.get("words") or [])]
+        if seg_words and words and seg_words[0] is not words[0] and len(seg_words) == len(words):
+            for copy, src in zip(seg_words, words):
+                copy["start"], copy["end"] = src["start"], src["end"]
+                copy["alignment_source"] = src.get("alignment_source")
+        for seg in segments:
+            sw = seg.get("words") or []
+            if sw:
+                seg["start"] = sw[0]["start"]
+                seg["end"] = sw[-1]["end"]
+        log(f"Timestamps corregidos (MMS {coverage:.1%}; aplicados a todas las salidas).")
+        return True
+    except Exception as e:
+        if isinstance(e, InterruptedError):
+            raise
+        if required:
+            raise RuntimeError(f"MMS es obligatorio para el perfil editorial y falló: {e}") from e
+        log(f"⚠ La alineación falló, se usan los timestamps de whisper: {e}")
+        return False
+
+
 # ------------------------------------------------------------------ transcribe --
 def transcribe(
     audio, outdir, *,
@@ -281,43 +334,12 @@ def transcribe(
 
     # Alineación forzada: whisper transcribe bien pero sus tiempos de palabra son flojos (pega
     # palabras+silencio+respiración en una sola). MMS re-alinea el texto al audio → bordes precisos.
-    # `words` y los `words` de cada segmento comparten los mismos dicts → mutarlos corrige ambas salidas.
     aligned_ok = False
-    if want_align and not align.available():
-        if align_required:
-            raise RuntimeError("MMS es obligatorio para el perfil editorial, pero torchaudio no está disponible.")
-        log("⚠ MMS no está disponible; se conservan los timestamps de Whisper.")
-    elif want_align:
-        log("Corrigiendo timestamps con alineación forzada (MMS)… (más lento, la 1ª vez descarga el modelo)")
-        if progress_cb:
-            progress_cb(0.0, None)
-        try:
-            aligned = align.align_words(audio, words, log_cb=log, progress_cb=progress_cb,
-                                        cancel=cancel)
-            fallback = sum(word.get("alignment_source") == "whisper_fallback"
-                           for word in aligned)
-            covered = sum(str(word.get("alignment_source", "")).startswith("mms")
-                          for word in aligned)
-            coverage = covered / max(1, len(aligned))
-            if align_required and fallback:
-                raise RuntimeError(f"MMS dejó {fallback} palabra(s) en fallback de Whisper")
-            for orig, new in zip(words, aligned):
-                orig["start"], orig["end"] = new["start"], new["end"]
-                orig["alignment_source"] = new.get("alignment_source")
-            for seg in segments:
-                sw = seg.get("words") or []
-                if sw:
-                    seg["start"] = sw[0]["start"]
-                    seg["end"] = sw[-1]["end"]
+    if want_align:
+        aligned_ok = align_transcription(audio, words, segments, required=align_required,
+                                         log_cb=log, progress_cb=progress_cb, cancel=cancel)
+        if aligned_ok:
             emit_all()   # re-escribir todas las salidas con los tiempos corregidos
-            aligned_ok = True
-            log(f"Timestamps corregidos (MMS {coverage:.1%}; aplicados a todas las salidas).")
-        except Exception as e:
-            if isinstance(e, InterruptedError):
-                raise
-            if align_required:
-                raise RuntimeError(f"MMS es obligatorio para el perfil editorial y falló: {e}") from e
-            log(f"⚠ La alineación falló, se usan los timestamps de whisper: {e}")
 
     if progress_cb:
         progress_cb(1.0, 0.0)

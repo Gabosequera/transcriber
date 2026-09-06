@@ -438,10 +438,15 @@ ni a ejecutar risa/prosodia.
     tracks/
       A/
         audio.flac
-        words.json
+        words.whisper.json        # checkpoint de Whisper (paso whisper_A)
+        utterances.whisper.json
+        words.aligned.json        # tras MMS (paso align_A; copia si MMS está desmarcado)
         utterances.json
+        words.json                # enriquecido con intensidad/arousal (paso prosody_A)
         laughter.json
         arousal.json
+        intensity.json
+        emotions.json
       B/
         ...
     views/
@@ -472,8 +477,12 @@ artefactos por pista, master canónico, vistas globales y vistas por chunk.
 - `editorial_chunks.py`: validación, ajuste seguro y materialización por chunk.
 - `automatico_ui.py`: selección de pistas, progreso, revisión e importación externa.
 
-Los manifests separan audio, señales, master, plan semántico y materialización. Cambiar
-el prompt, regenerar chunks o mover una frontera no repite Whisper, MMS, risa o prosodia.
+Los manifests separan audio, Whisper, alineación MMS, señales, master, plan semántico y
+materialización. Cambiar el prompt, regenerar chunks o mover una frontera no repite
+Whisper, MMS, risa o prosodia; un fallo de MMS tampoco descarta la transcripción ya hecha.
+Los pasos `align`, `laughter` y `prosody` son opcionales (`spec.steps`, casillas del panel
+«Pipeline editorial»); el modelo de Whisper por defecto es el de Ajustes
+(`large-v3-turbo`). Al reanudar con trabajo previo la UI pregunta si retomar o reescribir.
 
 ## 13. Criterios de aceptación de la Fase 1
 

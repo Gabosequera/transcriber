@@ -241,7 +241,8 @@ cd /data/transcriber
 `run.sh` prepara las librerías CUDA del venv y abre la ventana. Ahí:
 1. Elegís **dispositivo** (GPU si hay, o CPU) — se ve cuál estás usando y podés cambiarlo.
 2. **Importar audio** (wav/mp3/flac/m4a/mp4…).
-3. **Modelo** (`tiny`→`large-v3`) e **idioma** (`es`).
+3. **Modelo** (`tiny`→`large-v3-turbo`; por defecto el elegido en Ajustes, `large-v3-turbo`)
+   e **idioma** (`es`).
 4. Marcás qué **salidas** querés (`words.json` siempre sale).
 5. **Ajustar timestamps con IA de alineación** (recuadro verde, recomendado): al terminar whisper,
    un 2º modelo (MMS) re-alinea las palabras al audio → tiempos precisos. Whisper transcribe bien
@@ -282,9 +283,9 @@ Se guardan en `presets.json` junto a la app.
 
 ## Notas
 
-- **GPU:** detecta automáticamente la NVIDIA. Con **4 GB de VRAM**, `medium` va bien;
-  `large-v3` puede no caber — si la GPU se queda sin memoria, la app avisa y podés bajar de
-  modelo o pasar a CPU.
+- **GPU:** detecta automáticamente la NVIDIA. El default es `large-v3-turbo` (calidad de
+  large, mucho más rápido; cabe en 4 GB con int8). Si la GPU se queda sin memoria, la app
+  avisa y podés bajar de modelo (Ajustes → Whisper) o pasar a CPU.
 - **CPU:** usa `int8` (lo razonable sin GPU). Modelos grandes serán lentos.
 - El **primer uso** de cada modelo lo descarga una sola vez. En Windows administrado los
   cachés viven en `shared/cache`; en desarrollo se respetan los cachés del perfil.

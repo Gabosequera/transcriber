@@ -58,6 +58,9 @@ _DEFAULTS = {
     "gpu_prefer": True,     # preferir GPU para todo lo que se pueda (carril CUDA: whisper + torch)
     "llama_device": "auto",  # GPU del LALM (carril Vulkan): "auto" | "VulkanN" | "cpu"
     "gpu_torch_windows": False,  # experimental: forzar torch-GPU en Windows (choca cuDNN con Whisper)
+    # modelo de Whisper por defecto en TODAS las pestañas (Transcribir, Automático, wizard).
+    # large-v3-turbo: calidad de large con velocidad muy superior. Se cambia en Ajustes.
+    "whisper_model": "large-v3-turbo",
     # keys de APIs online: viven SOLO acá (config.json, por-máquina) — nunca en
     # presets, spec, manifests ni en el zip de ship.
     "openrouter_api_key": "",   # visión VLM + descripción de audio multi-vendor
@@ -415,10 +418,27 @@ def llama_device() -> str:
 
 
 # ==================================================== auto-modelo por hardware --
+WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+DEFAULT_WHISPER_MODEL = "large-v3-turbo"
+
+
+def whisper_model() -> str:
+    """Modelo de Whisper elegido en Ajustes (large-v3-turbo de fábrica). Es el default que
+    usan todas las pestañas; cada corrida puede cambiarlo puntualmente en su propio selector."""
+    value = str(load().get("whisper_model") or "").strip()
+    return value if value in WHISPER_MODELS else DEFAULT_WHISPER_MODEL
+
+
 def recommend_whisper_model() -> str:
-    """Modelo de Whisper por defecto adecuado al hardware detectado, para NO reventar por
+    """Default de los selectores de modelo: el configurado en Ajustes (ver whisper_model()).
+    La sugerencia según hardware sigue disponible en hardware_whisper_suggestion()."""
+    return whisper_model()
+
+
+def hardware_whisper_suggestion() -> str:
+    """Modelo de Whisper que cabe con holgura en el hardware detectado, para NO reventar por
     memoria en equipos modestos. En GPU manda la VRAM; en CPU, la RAM (y la velocidad).
-    El usuario siempre puede cambiarlo en la GUI; esto es solo el default sensato.
+    Solo se muestra como sugerencia en Ajustes; el default real es whisper_model().
 
     OJO ARRANQUE: esto corre al CONSTRUIR la GUI (3 combos) — acá la GPU se sondea
     solo con nvidia-smi (name/vram). ct2_cuda_count() importaba ctranslate2→torch,

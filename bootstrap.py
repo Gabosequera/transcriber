@@ -23,7 +23,9 @@ def main() -> int:
         return 2
     env = dict(os.environ)
     env["TRANSCRIPTOR_ROOT"] = str(root)
-    return subprocess.call([sys.executable, str(launcher)], cwd=launcher.parent, env=env)
+    # No escribir bytecode dentro de la release: su contenido se verifica contra el manifiesto.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return subprocess.call([sys.executable, "-B", str(launcher)], cwd=launcher.parent, env=env)
 
 
 if __name__ == "__main__":

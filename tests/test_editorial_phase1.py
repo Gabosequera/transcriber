@@ -338,6 +338,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 mock.patch("medios.extraer_pista", side_effect=extract),
                 mock.patch("medios.decodifica_ventanas", return_value=True),
                 mock.patch("core.transcribe", side_effect=transcribe),
+                mock.patch("core.align_transcription", return_value=True),
                 mock.patch("prosodia.extract_arousal", return_value=arousal),
                 mock.patch("prosodia.extract_word_intensity", return_value=intensity),
                 mock.patch("laughter.detect", return_value=[]),
@@ -345,7 +346,7 @@ class PipelineIntegrationTests(unittest.TestCase):
                 mock.patch("editorial_pipeline._preflight", return_value=None),
             )
             with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], \
-                    patches[6], patches[7], patches[8], patches[9]:
+                    patches[6], patches[7], patches[8], patches[9], patches[10]:
                 spec = {"source": str(source), "project_dir": str(project),
                         "tracks": [{"stream_index": 0, "label": "Gabriel"}],
                         "chunking": {"mode": "codex"}}
@@ -379,6 +380,76 @@ class PipelineIntegrationTests(unittest.TestCase):
             self.assertEqual(calls.extract, 1)
             self.assertEqual(calls.transcribe, 1)
             self.assertEqual(calls.chunker, 1)
+            # Whisper corre UNA sola vez en todas las corridas: queda publicado como paso propio
+            # (words.whisper.json) y la alineación/señales se reutilizan al reanudar.
+            self.assertEqual(calls.transcribe, 1)
+            self.assertTrue((master_path.parent / "tracks/A/words.whisper.json").is_file())
+
+    def test_optional_steps_can_be_skipped_and_legacy_transcription_is_adopted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            source = base / "source.mkv"
+            source.write_bytes(b"media")
+            project = base / "project"
+            info = {"path": str(source), "size": 5, "mtime_ns": 1,
+                    "duracion": 90.0, "t0": 0.0, "video": {"width": 1920, "height": 1080},
+                    "pistas": [{"idx": 0, "codec": "aac", "canales": 1,
+                                "sample_rate": 48000, "start_time": 0.0,
+                                "delta": 0.0, "duracion": 90.0, "titulo": "Mic"}]}
+            calls = CounterCalls()
+
+            def extract(_source, _track, destination, **_kwargs):
+                Path(destination).parent.mkdir(parents=True, exist_ok=True)
+                Path(destination).write_bytes(b"flac")
+                return {"duracion": 90.0, "mono": True}
+
+            def transcribe(_audio, destination, **_kwargs):
+                calls.transcribe += 1
+                destination = Path(destination)
+                write_json(destination / "words.json", [
+                    {"word": "hola", "start": 1.0, "end": 1.4, "prob": 0.99}])
+                write_json(destination / "segments.json", [
+                    {"start": 1.0, "end": 1.4, "text": "hola"}])
+                return {"device": "cpu", "duration": 90.0, "language": "es",
+                        "n_words": 1, "n_segments": 1, "aligned": False}
+
+            events = []
+            with mock.patch("medios.inspeccionar", return_value=info), \
+                    mock.patch("medios.fingerprint", return_value={"hash_muestreado": "abc"}), \
+                    mock.patch("medios.extraer_pista", side_effect=extract), \
+                    mock.patch("medios.decodifica_ventanas", return_value=True), \
+                    mock.patch("core.transcribe", side_effect=transcribe), \
+                    mock.patch("editorial_pipeline._preflight", return_value=None):
+                spec = {"source": str(source), "project_dir": str(project),
+                        "tracks": [{"stream_index": 0, "label": "Gabriel"}],
+                        "transcription": {"model": "large-v3-turbo"},
+                        "steps": {"align": False, "laughter": False, "prosody": False}}
+                result = editorial_pipeline.run(spec, event_cb=events.append)
+                master = editorial_io.read_json(result["master"])
+                track = master["tracks"]["A"]
+                self.assertEqual(track["laughter"], [])
+                self.assertEqual(track["arousal"], [])
+                self.assertEqual(track["words"][0]["alignment_source"], "whisper")
+                self.assertEqual(master["transcription"]["model"], "large-v3-turbo")
+                statuses = {event["step"]: event["status"] for event in events
+                            if event["tipo"] == "step"}
+                self.assertEqual(statuses["prosody_A"], "skipped")
+                self.assertEqual(statuses["laughter_A"], "skipped")
+                self.assertFalse((Path(result["master"]).parent / "tracks/A/laughter.json").exists())
+
+                # Una corrida de la versión anterior (paso único transcribe_A) se adopta como
+                # align_A sin repetir Whisper.
+                root = Path(result["master"]).parent
+                manifests = root / ".work" / "manifests"
+                legacy = editorial_io.read_json(manifests / "align_A.json")
+                (manifests / "align_A.json").unlink()
+                (manifests / "whisper_A.json").unlink()
+                write_json(manifests / "transcribe_A.json", {**legacy, "step": "transcribe_A"})
+                calls.transcribe = 0
+                events.clear()
+                editorial_pipeline.run(spec, event_cb=events.append)
+                self.assertEqual(calls.transcribe, 0)
+                self.assertTrue((manifests / "align_A.json").is_file())
 
 
 class CounterCalls:

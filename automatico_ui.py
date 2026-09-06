@@ -11,6 +11,7 @@ import customtkinter as ctk
 import dialogs
 import editorial_chunks
 import editorial_pipeline
+import hardware
 import podcast_export
 import medios
 from editorial_io import format_time, parse_time, read_json
@@ -159,6 +160,63 @@ class ChunkReviewDialog(ctk.CTkToplevel):
         self.after(100, poll)
 
 
+class ResumeDialog(ctk.CTkToplevel):
+    """Al reanudar con trabajo previo en la carpeta: ¿retomar lo ya extraído o reescribir todo?"""
+
+    def __init__(self, parent, done: list[dict]):
+        super().__init__(parent)
+        self.choice = None
+        self.title("Trabajo anterior encontrado")
+        self.resizable(False, False)
+        self.configure(fg_color=BG)
+        self.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text="Esta carpeta ya tiene pasos completados", text_color=TEXT,
+                     font=ctk.CTkFont(size=16, weight="bold"), anchor="w").grid(
+                         row=0, column=0, sticky="w", padx=20, pady=(18, 4))
+        ctk.CTkLabel(self, text=("Se puede retomar usando la metadata ya extraída (solo se "
+                                 "ejecuta lo que falta o lo que cambió), o borrar ese avance y "
+                                 "empezar desde cero."),
+                     text_color=MUTED, wraplength=440, justify="left", anchor="w").grid(
+                         row=1, column=0, sticky="w", padx=20, pady=(0, 10))
+        box = ctk.CTkFrame(self, fg_color=SURFACE, corner_radius=8, border_width=1,
+                           border_color=BORDER)
+        box.grid(row=2, column=0, sticky="ew", padx=20)
+        box.grid_columnconfigure(0, weight=1)
+        shown = done[:10]
+        lines = [f"✓ {item['label']}" for item in shown]
+        if len(done) > len(shown):
+            lines.append(f"… y {len(done) - len(shown)} más")
+        ctk.CTkLabel(box, text="\n".join(lines), text_color="#c6cec9", justify="left",
+                     anchor="w", font=ctk.CTkFont(size=12)).grid(
+                         row=0, column=0, sticky="w", padx=14, pady=10)
+        buttons = ctk.CTkFrame(self, fg_color="transparent")
+        buttons.grid(row=3, column=0, sticky="ew", padx=20, pady=(14, 18))
+        buttons.grid_columnconfigure((0, 1, 2), weight=1)
+        ctk.CTkButton(buttons, text="Retomar con lo ya hecho", height=34, fg_color=ACCENT,
+                      hover_color=ACCENT_HOVER, command=lambda: self._pick("resume")).grid(
+                          row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(buttons, text="Empezar de cero (reescribir)", height=34,
+                      fg_color="#7a3b3b", hover_color="#8f4646",
+                      command=lambda: self._pick("rebuild")).grid(
+                          row=0, column=1, sticky="ew", padx=4)
+        ctk.CTkButton(buttons, text="Cancelar", height=34, fg_color=SURFACE_RAISED,
+                      hover_color="#2a322d", command=lambda: self._pick(None)).grid(
+                          row=0, column=2, sticky="ew", padx=(4, 0))
+        self.protocol("WM_DELETE_WINDOW", lambda: self._pick(None))
+        self.transient(parent.winfo_toplevel())
+
+    def _pick(self, choice):
+        self.choice = choice
+        self.destroy()
+
+    def ask(self):
+        self.update_idletasks()
+        self.grab_set()
+        self.focus_set()
+        self.wait_window()
+        return self.choice
+
+
 class AutomaticWorkspace:
     """Importación, selección multipista y ejecución del perfil editorial."""
 
@@ -216,42 +274,72 @@ class AutomaticWorkspace:
         panel.grid(row=0, column=1, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(9, weight=1)
+        panel.grid_rowconfigure(6, weight=1)
         ctk.CTkLabel(panel, text="PIPELINE EDITORIAL", text_color=MUTED,
                      font=ctk.CTkFont(size=10, weight="bold")).grid(
                          row=0, column=0, sticky="w", padx=14, pady=(14, 5))
         self.pipeline_title = ctk.CTkLabel(panel, text="Importa un medio", text_color=TEXT,
                                            font=ctk.CTkFont(size=14, weight="bold"))
-        self.pipeline_title.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 10))
+        self.pipeline_title.grid(row=1, column=0, sticky="w", padx=14, pady=(0, 8))
+
+        # Ajustes de la corrida: modelo de Whisper y pasos marcables (todos activos por defecto).
+        options = ctk.CTkFrame(panel, fg_color="transparent")
+        options.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 4))
+        options.grid_columnconfigure(0, weight=1)
+        model_row = ctk.CTkFrame(options, fg_color="transparent")
+        model_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        model_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(model_row, text="Modelo Whisper", text_color="#c6cec9", anchor="w").grid(
+            row=0, column=0, sticky="ew")
+        self.model_menu = ctk.CTkOptionMenu(model_row, values=hardware.WHISPER_MODELS, width=132,
+                                            height=26, font=ctk.CTkFont(size=11),
+                                            dynamic_resizing=False)
+        self.model_menu.set(hardware.whisper_model())
+        self.model_menu.grid(row=0, column=1, sticky="e")
 
         self.stage_labels = {}
-        stages = (("extract", "Preparar pistas"), ("transcribe", "Whisper + MMS"),
-                  ("signals", "Risa + intensidad + emoción"), ("master", "Metadata para AI externa"))
-        for row, (key, label) in enumerate(stages, 2):
-            line = ctk.CTkFrame(panel, fg_color="transparent")
-            line.grid(row=row, column=0, sticky="ew", padx=14, pady=2)
+        self.step_checks = {}
+        stages = (("extract", "Preparar pistas", False), ("whisper", "Whisper", False),
+                  ("align", "Alineación MMS (timestamps)", True),
+                  ("prosody", "Intensidad + emoción", True), ("laughter", "Risa", True),
+                  ("master", "Metadata para AI externa", False))
+        for row, (key, label, optional) in enumerate(stages, 1):
+            line = ctk.CTkFrame(options, fg_color="transparent")
+            line.grid(row=row, column=0, sticky="ew", pady=1)
             line.grid_columnconfigure(0, weight=1)
-            ctk.CTkLabel(line, text=label, text_color="#c6cec9", anchor="w").grid(
-                row=0, column=0, sticky="ew")
+            if optional:
+                check = ctk.CTkCheckBox(line, text=label, text_color="#c6cec9", height=22,
+                                        checkbox_width=16, checkbox_height=16,
+                                        font=ctk.CTkFont(size=12))
+                check.select()
+                check.grid(row=0, column=0, sticky="ew")
+                self.step_checks[key] = check
+            else:
+                ctk.CTkLabel(line, text=label, text_color="#c6cec9", anchor="w",
+                             font=ctk.CTkFont(size=12)).grid(row=0, column=0, sticky="ew",
+                                                             padx=(24, 0))
             state = ctk.CTkLabel(line, text="EN ESPERA", text_color="#69756e",
                                  font=ctk.CTkFont(size=9, weight="bold"))
             state.grid(row=0, column=1)
             self.stage_labels[key] = state
+        ctk.CTkLabel(options, text="Desmarca un paso para omitirlo en esta corrida.",
+                     text_color=MUTED, anchor="w", font=ctk.CTkFont(size=10)).grid(
+                         row=len(stages) + 1, column=0, sticky="w", pady=(2, 0))
 
         self.progress = ctk.CTkProgressBar(panel, progress_color=ACCENT)
         self.progress.set(0)
-        self.progress.grid(row=6, column=0, sticky="ew", padx=14, pady=(12, 7))
+        self.progress.grid(row=3, column=0, sticky="ew", padx=14, pady=(8, 7))
         self.output_entry = ctk.CTkEntry(panel, placeholder_text="Carpeta del proyecto")
-        self.output_entry.grid(row=7, column=0, sticky="ew", padx=14, pady=4)
+        self.output_entry.grid(row=4, column=0, sticky="ew", padx=14, pady=4)
         ctk.CTkButton(panel, text="Elegir carpeta", height=28, fg_color=SURFACE_RAISED,
                       hover_color="#2a322d", command=self._pick_output).grid(
-                          row=8, column=0, sticky="ew", padx=14, pady=(2, 7))
+                          row=5, column=0, sticky="ew", padx=14, pady=(2, 7))
         self.log = ctk.CTkTextbox(panel, wrap="word", font=ctk.CTkFont(size=10))
-        self.log.grid(row=9, column=0, sticky="nsew", padx=14, pady=7)
+        self.log.grid(row=6, column=0, sticky="nsew", padx=14, pady=7)
         self.log.configure(state="disabled")
 
         actions = ctk.CTkFrame(panel, fg_color="transparent")
-        actions.grid(row=10, column=0, sticky="ew", padx=14, pady=(4, 6))
+        actions.grid(row=7, column=0, sticky="ew", padx=14, pady=(4, 6))
         actions.grid_columnconfigure((0, 1), weight=1)
         self.view_button = ctk.CTkButton(actions, text="Conversación", height=28,
                                          state="disabled", fg_color=SURFACE_RAISED,
@@ -264,20 +352,29 @@ class AutomaticWorkspace:
         self.agent_button = ctk.CTkButton(panel, text="Importar plan JSON externo", height=28,
                                           state="disabled", fg_color=SURFACE_RAISED,
                                           hover_color="#2a322d", command=self._import_agent_chunks)
-        self.agent_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.agent_button.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.accept_button = ctk.CTkButton(panel, text="Aceptar y exportar cortes", height=32,
                                            state="disabled", fg_color=ACCENT,
                                            command=self._accept_cuts)
-        self.accept_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.accept_button.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.open_project_button = ctk.CTkButton(panel, text="Abrir proyecto existente", height=28,
                                                 fg_color=SURFACE_RAISED,
                                                 command=self._open_project)
-        self.open_project_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.open_project_button.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.run_button = ctk.CTkButton(panel, text="Procesar pistas de voz", height=38,
                                         state="disabled", fg_color=ACCENT,
                                         hover_color=ACCENT_HOVER, command=self._run_or_cancel,
                                         font=ctk.CTkFont(size=13, weight="bold"))
-        self.run_button.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 14))
+        self.run_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 14))
+
+    def set_default_model(self, value: str):
+        """Sigue al modelo por defecto de Ajustes (sin tocar una corrida en curso)."""
+        if value in hardware.WHISPER_MODELS and not (self.worker and self.worker.is_alive()):
+            self.model_menu.set(value)
+
+    def _run_options(self) -> dict:
+        return {"model": self.model_menu.get(),
+                "steps": {key: bool(check.get()) for key, check in self.step_checks.items()}}
 
     def _build_track_controls(self, row, track, index):
         selected = ctk.CTkCheckBox(row, text="VOZ", width=54, height=26)
@@ -334,6 +431,9 @@ class AutomaticWorkspace:
         self.import_button.configure(state=state)
         self.output_entry.configure(state=state)
         self.open_project_button.configure(state=state)
+        self.model_menu.configure(state=state)
+        for check in self.step_checks.values():
+            check.configure(state=state)
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button):
             button.configure(state="disabled")
         if not active:
@@ -358,10 +458,19 @@ class AutomaticWorkspace:
         if not project_dir:
             messagebox.showwarning("Falta la salida", "Elige una carpeta para el proyecto.")
             return
+        options = self._run_options()
+        rebuild = False
+        done = editorial_pipeline.completed_work(project_dir)
+        if done:
+            choice = ResumeDialog(self.f, done).ask()
+            if choice is None:
+                return
+            rebuild = choice == "rebuild"
         spec = {"source": self.info["path"], "project_dir": project_dir,
                 "project_name": (Path(self.result["master"]).name.removesuffix(".editorial.master.json")
                                  if self.result else Path(self.info["path"]).stem), "tracks": tracks,
-                "transcription": {"model": "medium", "language": "es", "device": "auto"},
+                "transcription": {"model": options["model"], "language": "es", "device": "auto"},
+                "steps": options["steps"], "rebuild": rebuild,
                 "chunking": {"mode": "external"}}
         self.cancel = threading.Event()
         self.progress.set(0)
@@ -374,6 +483,11 @@ class AutomaticWorkspace:
         for label in self.stage_labels.values():
             label.configure(text="EN ESPERA", text_color="#69756e")
         self._append_log("\n══════════ Nueva corrida editorial ══════════")
+        skipped = [key for key, on in options["steps"].items() if not on]
+        self._append_log(f"Modelo Whisper: {options['model']}"
+                         + (f" · pasos omitidos: {', '.join(skipped)}" if skipped else "")
+                         + (" · reescribiendo desde cero" if rebuild else
+                            " · retomando lo ya hecho" if done else ""))
 
         def work():
             try:
@@ -388,12 +502,11 @@ class AutomaticWorkspace:
 
     @staticmethod
     def _stage_group(step: str) -> str:
-        if step.startswith("extract_"):
-            return "extract"
-        if step.startswith("transcribe_"):
-            return "transcribe"
-        if step.startswith(("prosody_", "laughter_")):
-            return "signals"
+        for prefix, group in (("extract_", "extract"), ("whisper_", "whisper"),
+                              ("align_", "align"), ("transcribe_", "align"),
+                              ("prosody_", "prosody"), ("laughter_", "laughter")):
+            if step.startswith(prefix):
+                return group
         return "master"
 
     def _append_log(self, message: str):
@@ -418,7 +531,8 @@ class AutomaticWorkspace:
                     status = event.get("status")
                     text, color = ({"running": ("PROCESANDO", "#e6b85c"),
                                     "ok": ("LISTO", ACCENT),
-                                    "reused": ("REUTILIZADO", ACCENT)}.get(
+                                    "reused": ("REUTILIZADO", ACCENT),
+                                    "skipped": ("OMITIDO", MUTED)}.get(
                                         status, (str(status).upper(), MUTED)))
                     self.stage_labels[group].configure(text=text, text_color=color)
                 elif kind == "ui_done":

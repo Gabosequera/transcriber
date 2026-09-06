@@ -320,8 +320,19 @@ def _validate_release_manifest(manifest: dict, expected_version: str) -> dict[st
     return expected
 
 
+def _is_bytecode_artifact(relative: Path) -> bool:
+    """Caché de bytecode que Python puede generar al importar módulos de la release.
+
+    No forma parte del manifiesto y no debe invalidar la instalación."""
+    return "__pycache__" in relative.parts or relative.suffix in {".pyc", ".pyo"}
+
+
 def verify_installed_release(directory: Path, expected_version: str,
-                             release_manifest_sha256: str | None = None) -> dict:
+                             release_manifest_sha256: str | None = None, *,
+                             strict: bool = False) -> dict:
+    """Comprueba que la release instalada coincide con su manifiesto. `strict=False` (arranque)
+    tolera la caché de bytecode que Python pueda haber dejado; `strict=True` (instalación) la
+    considera un archivo sobrante → la release se reconstruye limpia desde el paquete."""
     manifest_path = directory / "release-manifest.json"
     try:
         manifest_bytes = manifest_path.read_bytes()
@@ -333,7 +344,8 @@ def verify_installed_release(directory: Path, expected_version: str,
     expected = _validate_release_manifest(manifest, expected_version)
     actual = {
         path.relative_to(directory).as_posix()
-        for path in directory.rglob("*") if path.is_file()
+        for path in directory.rglob("*")
+        if path.is_file() and (strict or not _is_bytecode_artifact(path.relative_to(directory)))
     }
     declared = set(expected) | {"release-manifest.json"}
     if actual != declared:
@@ -593,7 +605,7 @@ def install_bundle(root: Path, update_manifest: dict, archive: Path, *,
         manifest = None
         if final.exists():
             try:
-                manifest = verify_installed_release(final, version, internal_hash)
+                manifest = verify_installed_release(final, version, internal_hash, strict=True)
             except UpdateError:
                 _progress(progress, "Reparando archivos de la release")
         if manifest is None:

@@ -51,16 +51,24 @@ def _words_for_segment(words: list[dict], start: float, end: float, cursor: int)
     return selected, cursor
 
 
+def _optional_json(path, default):
+    """Señal opcional (risa / arousal / intensidad): si el paso se desmarcó en la corrida no
+    existe el archivo y la pista sigue siendo válida, solo sin esa evidencia."""
+    if not path or not Path(path).is_file():
+        return default
+    return read_json(path)
+
+
 def _canonical_track(track: dict, position: int) -> dict:
     track_id = track["track_id"]
     source_words = read_json(track["words_path"])
     source_segments = read_json(track["utterances_path"])
-    laughter = read_json(track["laughter_path"])
-    arousal_doc = read_json(track["arousal_path"])
-    intensity_doc = read_json(track["intensity_path"])
+    laughter = _optional_json(track.get("laughter_path"), [])
+    arousal_doc = _optional_json(track.get("arousal_path"), {})
+    intensity_doc = _optional_json(track.get("intensity_path"), {})
     arousal = arousal_doc.get("events") or []
     intensity = intensity_doc.get("events") or []
-    if len(source_words) != len(intensity):
+    if intensity and len(source_words) != len(intensity):
         raise ValueError(f"pista {track_id}: words/intensity no son 1:1")
 
     words = []

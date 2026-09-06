@@ -29,6 +29,40 @@ import threading
 import time
 import traceback
 from pathlib import Path
+
+
+def _ensure_std_streams() -> None:
+    """Lanzada con pythonw (sin consola) la app arranca con sys.stdout/sys.stderr = None.
+    Cualquier librería que imprima progreso (tqdm en las descargas de torch.hub / HuggingFace,
+    p. ej. la 1ª descarga del modelo MMS) muere con "'NoneType' object has no attribute 'write'".
+    Se redirigen a shared/logs/salida.log para que nada falle y quede rastro."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    stream = None
+    try:
+        app_paths.LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        target = app_paths.LOGS_DIR / "salida.log"
+        mode = "w" if target.exists() and target.stat().st_size > 5 * 1024 * 1024 else "a"
+        stream = open(target, mode, encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        try:
+            stream = open(os.devnull, "w", encoding="utf-8")
+        except OSError:
+            return
+    if sys.stdout is None:
+        sys.stdout = stream
+    if sys.stderr is None:
+        sys.stderr = stream
+    if sys.__stdout__ is None:
+        sys.__stdout__ = stream
+    if sys.__stderr__ is None:
+        sys.__stderr__ = stream
+    # sin consola las barras de progreso solo ensucian el log: refrescar poco.
+    os.environ.setdefault("TQDM_MININTERVAL", "5")
+
+
+_ensure_std_streams()
+
 from tkinter import messagebox
 
 import customtkinter as ctk
@@ -559,8 +593,25 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=11), justify="left", anchor="w", wraplength=640).grid(
             row=5, column=0, sticky="w", padx=12, pady=(0, 10))
 
+        # ---- Whisper: modelo por defecto ----
+        wf = ctk.CTkFrame(wrap); wf.grid(row=5, column=0, sticky="ew", **pad)
+        wf.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(wf, text="Whisper", font=ctk.CTkFont(size=14, weight="bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 2))
+        ctk.CTkLabel(wf, text="Modelo por defecto").grid(row=1, column=0, sticky="w", padx=12, pady=4)
+        self.whisper_model_menu = ctk.CTkOptionMenu(wf, values=core.MODELS, width=180,
+                                                    command=self._on_whisper_model)
+        self.whisper_model_menu.set(hardware.whisper_model())
+        self.whisper_model_menu.grid(row=1, column=1, sticky="w", padx=(10, 12), pady=4)
+        ctk.CTkLabel(wf, text="Lo usan Transcribir, Automático y el wizard al arrancar. large-v3-turbo: "
+                     "calidad de large a mucha más velocidad (recomendado). Sugerido según el hardware "
+                     f"detectado: {hardware.hardware_whisper_suggestion()}.",
+                     text_color="gray55", font=ctk.CTkFont(size=11), justify="left",
+                     anchor="w", wraplength=640).grid(row=2, column=0, columnspan=2, sticky="w",
+                                                      padx=12, pady=(0, 10))
+
         # ---- memoria ----
-        mem = ctk.CTkFrame(wrap); mem.grid(row=5, column=0, sticky="ew", **pad)
+        mem = ctk.CTkFrame(wrap); mem.grid(row=6, column=0, sticky="ew", **pad)
         mem.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(mem, text="Memoria", font=ctk.CTkFont(size=14, weight="bold")).grid(
             row=0, column=0, sticky="w", padx=12, pady=(10, 2))
@@ -574,7 +625,7 @@ class App(ctk.CTk):
         # ---- estado guardado ----
         self.settings_status = ctk.CTkLabel(wrap, text="", text_color="#2fa572",
                                             font=ctk.CTkFont(size=12))
-        self.settings_status.grid(row=6, column=0, sticky="w", padx=10, pady=(0, 8))
+        self.settings_status.grid(row=7, column=0, sticky="w", padx=10, pady=(0, 8))
 
         # cargar valores actuales + poblar detección
         cfg = hardware.load()
@@ -752,6 +803,17 @@ class App(ctk.CTk):
     def _on_llama_dev(self, label):
         hardware.set_(llama_device=self._llama_dev_map.get(label, "auto"))
         self._settings_flash()
+
+    def _on_whisper_model(self, value):
+        hardware.set_(whisper_model=value)
+        # los selectores de las demás vistas siguen al default (sin tocar una corrida en curso)
+        try:
+            if not (self.worker and self.worker.is_alive()):
+                self.model_menu.set(value)
+            self.automatico.set_default_model(value)
+        except Exception:
+            pass
+        self._settings_flash(f"Modelo por defecto: {value} ✓")
 
     def _free_memory(self):
         if jobs.busy():                              # no descargar modelos en medio de un job
