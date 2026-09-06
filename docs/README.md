@@ -10,6 +10,7 @@ está en `skills/transcriptor/SKILL.md` porque se distribuye como skill, no como
 | Quiero… | Documento |
 |---|---|
 | Usar el modo Automático (podcast: pistas → bloques → recortes → AI → exportar) | [guia-automatico.md](guia-automatico.md) |
+| Implementar la navegación tipo editor (velocidad ×2–×8, atajos configurables, acciones rápidas, deshacer): diseño + prompt | [diseno-navegacion-editor.md](diseno-navegacion-editor.md) |
 | Usar el modo Manual (Transcribir, Limpiar audio, Extraer metadata, Marcar) | [guia-manual.md](guia-manual.md) |
 | Saber qué decisiones de producto están vigentes y cuáles quedaron fuera | [especificacion-editorial.md](especificacion-editorial.md) |
 | Entender cómo está implementado, qué no romper y qué falta | [referencia-tecnica.md](referencia-tecnica.md) |

@@ -343,6 +343,15 @@ medio que nunca se publica como master. Al aparecer la metadata real se adoptan
 por fingerprint. Las eliminaciones de items y descendientes quedan protegidas
 frente a respuestas AI posteriores, además de las correcciones y capas borradas.
 
+### Pendiente: navegación tipo editor — diseño 2026-09-06
+
+Velocidad ×1–×8 (atempo + `fps=VS_FPS/rate` + skip de B-frames/claves, mismo reloj
+maestro), atajos configurables (`keymap.py` + sección Atajos), acciones de navegación
+y edición (bordes, fotograma, dividir, recortar, A = aceptado con campo `accepted`
+aditivo en trims.json), deshacer/rehacer y puertas de rendimiento medibles. Diseño y
+prompt de implementación por fases en
+[diseno-navegacion-editor.md](diseno-navegacion-editor.md). Sin código todavía.
+
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
 El pie de estado del editor tiene altura fija y su wrap sigue al ancho real de la

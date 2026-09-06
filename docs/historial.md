@@ -473,3 +473,13 @@ códec y la calidad del original y mueve cada límite entre bloques al fotograma
 clave anterior, compartido por ambos bloques; el log informa el desplazamiento y
 los hijos heredan el corte real. Motivación: footage raw o intra debe salir
 idéntico, solo cortado. 79 tests (copia con GOP de 1 s, ProRes y HEVC reales).
+
+Cierre de la sesión: diseño (sin código) de la navegación tipo editor en
+`docs/diseno-navegacion-editor.md`: velocidad ×1–×8 aplicando el mismo `rate` al
+reloj de FFplay (`atempo`) y al stream de video (`fps=VS_FPS/rate`, skip de B-frames
+y de no-claves), atajos configurables con `keymap.py` puro y sección Atajos, índice
+de bordes con bisect, acciones de edición por `persist` (dividir, recortar, empujar,
+A = aceptado con `accepted` aditivo en trims.json sin tocar la exportación),
+deshacer/rehacer y puertas de rendimiento medidas con `benchmark_preview.py`. La
+Parte 2 es el prompt por fases con invariantes y condiciones de parada para la AI
+que lo implemente.
