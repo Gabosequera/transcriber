@@ -421,10 +421,13 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
 - Diseño agente-app (2026-07-16): aprobado, sin implementar.
 - Diferidos: batching de inferencia (HALLAZGOS-futuros.md), semillas del índice
   desde eventos VLM, torch-GPU en Windows junto a whisper.
-# 2026-09-06 — Proyectos modulares, capas, temas y reproductor (0.3.0)
+# 2026-09-06 — Proyectos modulares, capas, temas y reproductor (0.3.1)
 
 Entrega de los cinco objetivos en commits separados, seguida de revisión de
-compatibilidad y preparación de release 0.3.0. Suite final: 75 tests; smoke Tk con
+compatibilidad y release 0.3.1. El candidato 0.3.0 pasó Linux; Windows detectó una
+aserción de test basada en prefijos de ruta que no toleraba TEMP con nombres 8.3.
+Se reemplazó por `Path.samefile`, manteniendo el tag anterior sin reescribirlo.
+Suite final: 75 tests; smoke Tk con
 exportación multipista, reimportación automática del hijo, silencios sin inferencia,
 dos pasadas de temas, edición/borrado, marcas antes de transcribir y playback real.
 Las capas comunes sustituyen los gestos propios de recortes: doble click abre el

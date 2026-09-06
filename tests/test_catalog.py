@@ -25,7 +25,9 @@ class CatalogTests(unittest.TestCase):
             shutil.copytree(root,Path(tmp)/'copia')
             moved=Path(tmp)/'copia'
             found,_=catalog.discover(moved/'renombrado.mp4',fp,root=moved)
-            self.assertTrue(found[0]['path'].startswith(str(moved)))
+            # Windows CI usa TEMP con nombres 8.3; discover resuelve la ruta larga.
+            self.assertTrue(Path(found[0]['path']).samefile(
+                moved/'proyecto/editorial/original.editorial.master.json'))
             (moved/'.transcriptor/catalog.json').unlink()
             self.assertEqual(len(catalog.discover(moved/'renombrado.mp4',fp,root=moved)[0]),1)
             other=copy.deepcopy(master)
