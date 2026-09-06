@@ -328,6 +328,17 @@ de marcas), `python vistas.py generar|dossier <master>`,
 
 ## 7. Estado actual y pendientes
 
+### Descubrimiento — objetivo D
+
+`editorial_catalog.py` escanea masters (omite runtimes, releases, tracks y enlaces),
+cachea fingerprint/digest por tamaño+mtime y revalida el candidato antes de abrir.
+Catálogo relativo en `.transcriptor/catalog.json`; reconstrucción tras borrado o
+corrupción, deduplicación de copias equivalentes, selector ante versiones distintas.
+No migra ni reescribe masters, marcas o recortes existentes. Los hijos nuevos se
+descubren en `podcast-*/projects/`. La UI descarta resultados de otro medio mediante
+generación y evita ejecutar inferencia sobre un master derivado. 69 tests y smoke
+de importación automática con App/Tk en Windows.
+
 ### Temas — objetivo C
 
 `editorial_topics.py`: petición con ámbito, ID de ciclo y digests de master/capas.

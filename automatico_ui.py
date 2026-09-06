@@ -522,6 +522,16 @@ class AutomaticWorkspace:
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
                        self.silence_button, self.review_button, self.trim_export_button):
             button.configure(state="disabled")
+        generation = self.editor._gen
+        def discover():
+            import editorial_catalog
+            try:
+                candidates, warnings = editorial_catalog.discover(source, fingerprint)
+                self.events.put({"tipo":"discovered","generation":generation,
+                                 "candidates":candidates,"warnings":warnings})
+            except Exception as error:
+                self.events.put({"tipo":"log","message":f"Descubrimiento: {error}"})
+        threading.Thread(target=discover,daemon=True,name="catalog-discovery").start()
 
     def _selected_tracks(self) -> list[dict]:
         selected = []
@@ -560,6 +570,9 @@ class AutomaticWorkspace:
             return
         if not self.info:
             messagebox.showwarning("Falta el video", "Importa un video o audio primero.")
+            return
+        if self.layers.store and self.layers.store.master.get("derivation"):
+            self._append_log("Proyecto derivado: la metadata ya está disponible. Usa Analizar silencios o Analizar temas.")
             return
         tracks = self._selected_tracks()
         if not tracks:
@@ -701,6 +714,8 @@ class AutomaticWorkspace:
                     self._append_log(f"Videos exportados: {event['path']}")
                     self.pipeline_title.configure(text="Cortes exportados")
                 elif kind == "project_loaded":
+                    if event.get("generation",self.editor._gen) != self.editor._gen:
+                        continue
                     self.result = event["result"]
                     self.plan = event["plan"]
                     self._set_processing(False)
@@ -716,6 +731,18 @@ class AutomaticWorkspace:
                     self.editor.refrescar_layout()
                     self.run_button.configure(text="Reanudar / actualizar", state="normal")
                     self._load_trims_async()
+                    self._refresh_plan_buttons()
+                    self.pipeline_title.configure(text="Proyecto detectado y cargado")
+                    self._append_log("Metadata recuperada sin inferencia: " + str(self.result['master']))
+                elif kind == "discovered":
+                    if event["generation"] != self.editor._gen or self.result:
+                        continue
+                    for warning in event["warnings"][:8]:
+                        self._append_log(warning)
+                    if len(event["candidates"]) == 1:
+                        self._load_project(event["candidates"][0]["path"])
+                    elif event["candidates"]:
+                        self._choose_discovered(event["candidates"])
                 elif kind == "ui_error":
                     cancelled = self.cancel.is_set()
                     self._set_processing(False)
@@ -858,12 +885,27 @@ class AutomaticWorkspace:
                                  remember="editorial_project")
         if not path:
             return
+        self._load_project(path)
+
+    def _choose_discovered(self, candidates):
+        window=ctk.CTkToplevel(self.f)
+        window.title("Varias versiones de metadata para este clip")
+        window.geometry("750x300")
+        for candidate in candidates:
+            def choose(c=candidate):
+                window.destroy()
+                self._load_project(c['path'])
+            ctk.CTkButton(window,text=candidate['name']+' · '+candidate['path'],command=choose).pack(
+                fill="x",padx=12,pady=6)
+
+    def _load_project(self, path):
         # El medio debe estar cargado: la comparación por fingerprint permite mover
         # carpetas entre Windows y Linux sin confiar en rutas absolutas antiguas.
         if not self.info:
             messagebox.showwarning("Falta el medio", "Importa primero el video de este proyecto.")
             return
         source = self.info["path"]
+        generation=self.editor._gen
         def work():
             master = read_json(path)
             if master.get("schema") != "editorial-master/1":
@@ -873,6 +915,7 @@ class AutomaticWorkspace:
             saved = Path(path).parent / "views" / "chunks.json"
             plan = editorial_chunks.validate_plan(read_json(saved), master) if saved.is_file() else None
             self.events.put({"tipo": "project_loaded", "plan": plan,
+                             "generation":generation,
                              "tracks": list(master["tracks"].values()),
                              "result": {"master": path, "source": source, "chunk_planner": "external"}})
         self._background(work)

@@ -11,6 +11,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any, Iterable
@@ -75,7 +76,14 @@ def atomic_write_text(path: str | Path, text: str) -> Path:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, destination)
+        for attempt in range(6):
+            try:
+                os.replace(temporary, destination)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(.02 * 2 ** attempt)
     except Exception:
         try:
             os.unlink(temporary)

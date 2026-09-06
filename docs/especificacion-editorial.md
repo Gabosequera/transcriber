@@ -475,6 +475,11 @@ quitarían del video. Reglas vigentes:
 
 ## 11. Archivos esperados de la Fase 1
 
+La estructura existente se conserva. Se agregan `layers/`, mapas/vistas de temas en
+`views/`, proyectos hijos dentro de cada exportación (`projects/<ordinal>/editorial`)
+y un catálogo relativo `.transcriptor/catalog.json` reconstruible. El fingerprint
+decide la asociación; ante versiones distintas del master, el usuario elige.
+
 ```text
 <proyecto>/
   editorial/

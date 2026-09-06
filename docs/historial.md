@@ -423,6 +423,9 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
   desde eventos VLM, torch-GPU en Windows junto a whisper.
 # 2026-09-06 — Proyectos modulares (sesión en curso)
 
+Objetivo D: catálogo por contenido, reconstrucción automática, carpetas movibles,
+selector de versiones e importación automática de padre/hijo. 69 tests y smoke Tk.
+
 Objetivo C: bucle externo de temas en dos pasadas, unión trazable de recurrencias,
 capas multirrango y nueva Tarea 3. Suite ampliada a 66 tests.
 

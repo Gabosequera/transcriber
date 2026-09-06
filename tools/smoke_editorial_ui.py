@@ -4,6 +4,7 @@ import argparse
 import subprocess
 import sys
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
@@ -18,14 +19,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hold", action="store_true")
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1] / "media" / "smoke-modular"
+    root = Path(__file__).resolve().parents[1] / "media" / "smoke-modular" / uuid.uuid4().hex[:8]
     root.mkdir(parents=True, exist_ok=True)
     source = root / "padre.mkv"
     if not source.exists():
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
             "testsrc2=size=320x180:rate=25:duration=12", "-f", "lavfi", "-i",
             "sine=frequency=440:duration=12", "-map", "0:v", "-map", "1:a", "-map", "1:a",
-            "-c:v", "libx264", "-c:a", "pcm_s16le", str(source)], check=True, **medios.flags_subprocess())
+            "-c:v", "libx264", "-c:a", "pcm_s16le", "-metadata", "comment="+root.name,
+            str(source)], check=True, **medios.flags_subprocess())
     data = fixture()
     data["media"].update(path=str(source), t0=0, fingerprint=medios.fingerprint(source))
     project = editorial_master.write_package(root / "padre" / "editorial", data)["master"]
@@ -50,7 +52,10 @@ def main():
 
     try:
         spin(lambda: workspace.info is not None and len(workspace.track_widgets) == 2)
-        if not workspace.result:
+        if hasattr(workspace,'_load_project'):
+            spin(lambda:workspace.result is not None)
+            assert Path(workspace.result['master']) == project
+        elif not workspace.result:
             workspace.events.put({"tipo": "project_loaded", "plan": None,
                 "tracks": list(data["tracks"].values()),
                 "result": {"master": str(project), "source": str(source), "chunk_planner": "external"}})
@@ -109,10 +114,28 @@ def main():
                 topic['items'][0]['comment']='Recurrencia revisada a mano'
                 controller.persist(topic['layer_id'],topic['items'][0])
                 assert layers.LayerStore(store.root,data).layers[topic['layer_id']]['items'][0]['edited']
-        workspace.editor._set_playhead(8)
+        if hasattr(workspace,'_load_project'):
+            import editorial_trims, podcast_export
+            trims=editorial_trims.new_document(data['media']['fingerprint'],12)
+            editorial_trims.add_cut(trims,3,7)
+            exported=podcast_export.export_plan(project,None,source,root/('export-'+uuid.uuid4().hex[:8]),trims=trims)
+            entry=editorial_io.read_json(exported/'exports.json')['files'][0]
+            child=exported/entry['file']
+            workspace.editor.cargar(str(child))
+            spin(lambda:workspace.result and Path(workspace.result['master'])==exported/entry['project_master'])
+            spin(lambda:workspace.layers.store is not None and workspace.layers.store.master.get('derivation'))
+            child_data=workspace.layers.store.master
+            assert child_data['tracks']['B']['words'][-1]['t_ini']==4
+            assert all(w['text']!='eliminado' for t in child_data['tracks'].values() for w in t['words'])
+            workspace._analyze_silences()
+            spin(lambda: not workspace.worker.is_alive() and workspace.view_button.cget('state')=='normal')
+            app.update()
+            assert (Path(workspace.result['master']).parent/'tracks/A/audio.flac').is_file()
+        nav=min(8,workspace.info['duracion']-1)
+        workspace.editor._set_playhead(nav)
         workspace.editor._zoom(2)
         app.update()
-        assert workspace.editor.t_play == 8
+        assert workspace.editor.t_play == nav
         assert workspace.view_button.cget("state") == "normal"
         assert "torch" not in sys.modules and "transformers" not in sys.modules
         print("SMOKE UI OK: App real, importación, metadata, carriles, salto y zoom; sin modelos.", flush=True)

@@ -159,10 +159,14 @@ transcripción y señales, en tiempos de su propio video. `derivation.segments`
 permite volver a cada tramo del padre, incluso con recortes. Analizar silencios
 extrae audio del hijo una vez para medir RMS; no ejecuta modelos de nuevo.
 
-Importa el mismo video y pulsa **Abrir proyecto existente** para elegir su master JSON. La
-app comprueba que el video sea el mismo por contenido, carga el plan de bloques y los
-recortes, y no hace falta repetir ningún análisis. Las rutas guardadas no se usan para
-exportar: siempre se exporta desde el video que tienes cargado.
+Importa cualquier padre o hijo: la app busca automáticamente su master por fingerprint
+en la carpeta del medio y el conjunto vecino, carga el plan y los recortes sin repetir
+análisis. Si hay metadata distinta para el mismo contenido, ofrece las versiones.
+**Abrir proyecto existente** sigue disponible para metadata guardada fuera del conjunto.
+Las rutas guardadas no se usan para exportar: se usa el video cargado.
+El índice `.transcriptor/catalog.json` es una caché reconstruible con rutas relativas;
+mover o copiar el conjunto conserva el descubrimiento. Copiar solo el video a otro
+equipo requiere copiar también su proyecto: el video no contiene el transcript.
 
 ## Archivos del proyecto
 
