@@ -55,6 +55,36 @@ def main():
                 "tracks": list(data["tracks"].values()),
                 "result": {"master": str(project), "source": str(source), "chunk_planner": "external"}})
         spin(lambda: workspace.trims is not None)
+        if hasattr(workspace, "layers"):
+            spin(lambda: workspace.layers.store is not None)
+            import editorial_layers as layers
+            from types import SimpleNamespace
+            store = workspace.layers.store
+            layer = store.save(layers.new_layer(data, "Pedidos smoke"))
+            workspace.editor.refrescar_layout()
+            app.update()
+            g = workspace.editor._tl_geo()
+            controller = workspace.layers
+            for phase, t in (("press", 2.5), ("motion", 3.5)):
+                event = SimpleNamespace(x=workspace.editor._t2x(t,g),y=0)
+                controller.gesture(layer["layer_id"],phase,event,g,0)
+            from unittest import mock
+            with mock.patch.object(controller,"edit_dialog"):
+                controller.gesture(layer["layer_id"],"release",event,g,0)
+            saved=store.layers[layer["layer_id"]]
+            assert len(saved["items"]) == 1
+            item=copy_item=__import__('copy').deepcopy(saved['items'][0])
+            item['comment']='Busca la recurrencia'
+            controller.persist(layer['layer_id'],item)
+            assert layers.LayerStore(store.root,data).layers[layer['layer_id']]['items'][0]['comment'] == 'Busca la recurrencia'
+            controller.persist('autor',layers.new_item(2,3,comment='Pedido del autor'),create=True)
+            assert workspace.editor.reg.marcas[-1]['prompt']=='Pedido del autor'
+            controller.persist('recortes',layers.new_item(10,11,comment='Recorte smoke'),create=True)
+            assert workspace.trims['cuts'][-1]['reason']=='Recorte smoke'
+            controller.persist(layer['layer_id'],item,delete=True)
+            store.delete(layer['layer_id'])
+            workspace.editor.refrescar_layout()
+            assert not any(l['layer_id']==layer['layer_id'] for l in controller.all())
         workspace.editor._set_playhead(8)
         workspace.editor._zoom(2)
         app.update()

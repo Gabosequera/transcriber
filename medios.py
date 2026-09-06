@@ -332,9 +332,12 @@ def extraer_pista(video, pista: dict, destino, *, mono=False, sample_rate=None, 
     finally:
         if p.poll() is None:
             p.kill()
+        p.wait()
+        p.stdout.close()
+        extraction_error = (p.stderr.read() or "").strip()[:300]
+        p.stderr.close()
     if p.returncode != 0:
-        err = (p.stderr.read() or "").strip()[:300] if p.stderr else ""
-        raise RuntimeError(f"ffmpeg falló extrayendo la pista a:{pista['idx']}: {err}")
+        raise RuntimeError(f"ffmpeg falló extrayendo la pista a:{pista['idx']}: {extraction_error}")
     # validación mínima acá (el validador del pipeline decodifica ventanas además)
     if not destino.exists() or destino.stat().st_size == 0:
         raise RuntimeError(f"la extracción no produjo datos ({destino.name})")

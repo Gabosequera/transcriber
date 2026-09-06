@@ -439,6 +439,11 @@ ni a ejecutar risa/prosodia.
 
 ### 10.1 Recortes: propuestas revisables, nunca edición inmediata
 
+Los carriles editoriales se presentan mediante el sistema común de capas:
+selección, rangos, comentario/pedido, estado y edición de bordes. Capas propias y
+temas se almacenan en `layers/`; marcas, bloques y recortes envuelven los documentos
+vigentes. El Registro compartido sigue siendo autoridad para marcas.
+
 Después de los bloques (o sin ellos), la app puede proponer RECORTES: tramos que se
 quitarían del video. Reglas vigentes:
 

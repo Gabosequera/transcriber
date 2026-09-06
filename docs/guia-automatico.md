@@ -261,6 +261,16 @@ Opciones de `run`: `--model` (Whisper), `--language`, `--device auto|cpu|cuda`,
 
 ## Atajos del timeline
 
+**Capas y comentarios** crea, renombra, cambia el color o elimina capas propias.
+En cada carril arrastra en vacío para crear un rango, arrastra cuerpo/bordes para
+moverlo/estirarlo y usa doble click para editar etiqueta, comentario, estado y lista
+de tramos. Un item con varios rangos se selecciona como unidad; cada tramo se puede
+ajustar por separado. `X` cambia estado, `Supr` borra, `Esc` deselecciona.
+El menú derecho y el tooltip son comunes. Los bloques mantienen cobertura continua
+y ajustan sus vecinos al cambiar un borde; dividir el plan usa **Revisar chunks**.
+Las marcas envuelven el Registro compartido y los recortes mantienen `trims.json`:
+no hay dos copias editables. **Preparar capas para AI** publica `views/layers.json`.
+
 | Tecla / gesto | Acción |
 |---|---|
 | Click o arrastre sobre las pistas | Mover el playhead (scrub) |

@@ -328,6 +328,17 @@ de marcas), `python vistas.py generar|dossier <master>`,
 
 ## 7. Estado actual y pendientes
 
+### Capas — objetivo B
+
+`editorial_layers.py` define `editorial-layer/1`, almacenamiento con revisión,
+conflicto externo y tumbas para borrados. Adaptadores derivados para marcas,
+bloques y recortes. `editorial_layers_ui.py` centraliza gestos, menús, tooltip,
+editor de rangos/comentarios y administrador de capas. Se retiraron los gestos
+duplicados del antiguo carril de recortes de Automático. El editor Manual mantiene
+su carril de marcas usando el mismo Registro. Panel de Automático desplazable.
+Validación: 62 tests y smoke App/Tk con gestos, persistencia y eliminación de capa,
+pedidos del autor y creación de recorte mediante el adaptador.
+
 ### Proyectos modulares — 2026-09-06, objetivo A
 
 `editorial_projects.py` deriva sub-masters por intersección con segmentos conservados,

@@ -67,7 +67,8 @@ class EditorMedios:
 
     def __init__(self, parent, *, ancho_ctl=330, controles_pista_extra=None,
                  overlay_preview=None, carriles_extra=None, on_video_cargado=None,
-                 on_playhead=None, teclas_extra=None):
+                 on_playhead=None, teclas_extra=None, marcas_en_capas=False):
+        self._marks_height = 0 if marcas_en_capas else MARKS_H
         self.controles_pista_extra = controles_pista_extra
         self.overlay_preview = overlay_preview
         self.carriles_extra = carriles_extra
@@ -169,7 +170,7 @@ class EditorMedios:
         self.f_ctl.grid(row=0, column=0, sticky="ns", padx=(8, 4), pady=6)
         self.f_ctl.grid_propagate(False)
         self._ancho_ctl = ancho_ctl
-        self.tl = tk.Canvas(tlf, height=RULER_H + MARKS_H + LANE_H, bg="#121212",
+        self.tl = tk.Canvas(tlf, height=RULER_H + self._marks_height + LANE_H, bg="#121212",
                             highlightthickness=0)
         self.tl.grid(row=0, column=1, sticky="nsew", padx=(0, 8), pady=6)
         self.tl.bind("<Button-1>", self._tl_press)
@@ -658,7 +659,7 @@ class EditorMedios:
             return
         self.tl.focus_set()                    # habilita el teclado del editor
         self._drag_marca = None
-        if RULER_H <= e.y <= RULER_H + MARKS_H and self.reg is not None:
+        if self._marks_height and RULER_H <= e.y <= RULER_H + self._marks_height and self.reg is not None:
             t = self._x2t(e.x, g)
             hit = self._marca_hit(e.x, e.y, g)
             if hit:
@@ -684,7 +685,7 @@ class EditorMedios:
 
     def _carril_en(self, y):
         """(carril, y0) del carril EXTRA del dueño bajo la coordenada `y`, o None."""
-        y0 = RULER_H + MARKS_H
+        y0 = RULER_H + self._marks_height
         for c in self._carriles():
             alto = int(c.get("alto", 0))
             if y0 <= y < y0 + alto:
@@ -774,7 +775,7 @@ class EditorMedios:
 
     def _tl_doble(self, e):
         g = self._tl_geo()
-        if g and RULER_H <= e.y <= RULER_H + MARKS_H and self.reg is not None:
+        if self._marks_height and g and RULER_H <= e.y <= RULER_H + self._marks_height and self.reg is not None:
             hit = self._marca_hit(e.x, e.y, g)
             if hit:
                 self._seleccionar(hit[0], foco_prompt=True)
@@ -868,7 +869,7 @@ class EditorMedios:
         return sum(int(c.get("alto", 0)) for c in self._carriles())
 
     def _y0_pistas(self) -> int:
-        return RULER_H + MARKS_H + self._alto_extra()
+        return RULER_H + self._marks_height + self._alto_extra()
 
     def _alto_total(self) -> int:
         n = max(len(self.info["pistas"]), 1) if self.info else 1
@@ -879,7 +880,7 @@ class EditorMedios:
         no en cada redibujo — setearla dentro de _dibujar_timeline realimentaba
         <Configure> (consenso q.6)."""
         if getattr(self, "_esp", None) is not None:
-            self._esp.configure(height=RULER_H + MARKS_H + self._alto_extra())
+            self._esp.configure(height=RULER_H + self._marks_height + self._alto_extra())
         alto = self._alto_total()
         if self.tl.winfo_height() != alto:
             self.tl.configure(height=alto)
@@ -919,11 +920,11 @@ class EditorMedios:
             t += paso
 
         # ---- carril de MARCAS (fondo) ----
-        tl.create_rectangle(x0, RULER_H, x0 + ancho, RULER_H + MARKS_H,
+        tl.create_rectangle(x0, RULER_H, x0 + ancho, RULER_H + self._marks_height,
                             fill="#1b1b1b", outline="#2a2a2a")
 
         # ---- carriles EXTRA del dueño (read-only; la tab Marcar pinta metadata) ----
-        y = RULER_H + MARKS_H
+        y = RULER_H + self._marks_height
         for c in self._carriles():
             try:
                 c["dibujar"](tl, g, y)
@@ -951,7 +952,8 @@ class EditorMedios:
         self._pedir_tiles(int(ancho))          # tiles del zoom que falten (async)
 
         # ---- overlays: marcas + IN pendiente + playhead ----
-        self._dibujar_marcas(g, alto)
+        if self._marks_height:
+            self._dibujar_marcas(g, alto)
         if self._pend_in is not None and t0 <= self._pend_in <= t0 + span:
             x = self._t2x(self._pend_in, g)
             tl.create_line(x, RULER_H, x, alto, fill="#e8b34b", dash=(5, 3))
@@ -1132,7 +1134,7 @@ class EditorMedios:
 
     def _dibujar_marcas(self, g, alto):
         tl = self.tl
-        y0, y1 = RULER_H + 2, RULER_H + MARKS_H - 2
+        y0, y1 = RULER_H + 2, RULER_H + self._marks_height - 2
         for m, xa, xb in self._marcas_visibles(g):
             col = COL_MARCA[m.get("decision")]
             sel = m is self.sel_marca
@@ -1146,12 +1148,12 @@ class EditorMedios:
                                     width=2 if sel else 1)
                 # proyección sobre los carriles (patrón in/out de editor): rayado barato
                 # (UN item con stipple, no cientos de líneas — consenso q.6)
-                tl.create_rectangle(xa, RULER_H + MARKS_H, xb, alto, fill=col,
+                tl.create_rectangle(xa, RULER_H + self._marks_height, xb, alto, fill=col,
                                     stipple="gray12" if m.get("decision") != "excluir"
                                     else "gray25", outline="")
                 if m.get("decision") == "excluir":
-                    tl.create_line(xa, RULER_H + MARKS_H, xb, alto, fill=col, dash=(6, 4))
-                    tl.create_line(xa, alto, xb, RULER_H + MARKS_H, fill=col, dash=(6, 4))
+                    tl.create_line(xa, RULER_H + self._marks_height, xb, alto, fill=col, dash=(6, 4))
+                    tl.create_line(xa, alto, xb, RULER_H + self._marks_height, fill=col, dash=(6, 4))
                 if sel:                        # handles de los bordes
                     for xh in (xa, xb):
                         tl.create_rectangle(xh - 2, y0, xh + 2, y1, fill="#fff", outline="")
@@ -1394,7 +1396,7 @@ class EditorMedios:
         # espaciador con la altura del ruler + carril de marcas (+ carriles extra):
         # cada fila de controles queda a la par de su carril de pista
         self._esp = ctk.CTkFrame(self.f_ctl, fg_color="transparent",
-                                 height=RULER_H + MARKS_H + self._alto_extra())
+                                 height=RULER_H + self._marks_height + self._alto_extra())
         self._esp.grid(row=0, column=0)
         self._esp.grid_propagate(False)
         for i, pista in enumerate(self.info["pistas"]):

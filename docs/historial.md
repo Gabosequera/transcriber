@@ -423,6 +423,9 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
   desde eventos VLM, torch-GPU en Windows junto a whisper.
 # 2026-09-06 — Proyectos modulares (sesión en curso)
 
+Objetivo B: contrato y editor de capas, adaptadores sin duplicar marcas/recortes,
+comentarios para AI, protección frente a cambios externos. 62 tests y smoke Tk.
+
 Diseño publicado antes de código. Objetivo A: exportación con sub-masters trazables
 por segmentos, señales multipista y audio RMS reanudable. 57 tests y smoke real de
 App/Tk en Windows. Corregidas importaciones pesadas descubiertas por el smoke.
