@@ -239,7 +239,7 @@ def _gpu_kind_from_name(name: str) -> str:
 
 def _mark_cuda(gpus: list[dict]) -> list[dict]:
     """Marca cuda=True en las NVIDIA dedicadas si algún backend CUDA ve una GPU."""
-    has_cuda = ct2_cuda_count() > 0 or torch_cuda_available()
+    has_cuda = bool(_gpu_nvidia_smi().get("name"))
     for g in gpus:
         nv = (g.get("vendor") == "0x10de") or ("nvidia" in g.get("name", "").lower())
         if nv and g.get("kind") == "dedicada" and has_cuda:
@@ -313,7 +313,7 @@ def list_gpus() -> list[dict]:
     if not gpus:
         gpus = _list_gpus_llama()
     if not gpus:
-        g = gpu_info()      # último respaldo: solo la dedicada NVIDIA
+        g = _gpu_nvidia_smi()  # inventario de GUI; no importar backends de inferencia
         if g["name"]:
             gpus = [{"index": 0, "name": g["name"], "kind": "dedicada", "vendor": "0x10de",
                      "cuda": False, "vram_gb": g["vram_gb"]}]
@@ -392,11 +392,9 @@ def use_gpu_torch() -> bool:
     (Whisper sigue en GPU vía CTranslate2 — su carril es independiente). Es el MISMO comportamiento que
     la laptop Linux de dev (torch era +cpu) → misma precisión. Se puede forzar GPU (experimental) con
     config `gpu_torch_windows=True`."""
-    if not (gpu_prefer() and torch_cuda_available()):
-        return False
     if os.name == "nt" and not load().get("gpu_torch_windows", False):
         return False
-    return True
+    return bool(gpu_prefer() and torch_cuda_available())
 
 
 def torch_device() -> str:

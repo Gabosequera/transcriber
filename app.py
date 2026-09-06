@@ -655,7 +655,8 @@ class App(ctk.CTk):
                     "gpu": {"name": None, "vram_gb": 0.0, "torch_cuda": False, "ct2_cuda": 0}}
             try:
                 data["ram"] = hardware.ram_gb()
-                data["gpu"] = hardware.gpu_info()
+                data["gpu"] = (hardware.gpu_info() if save else
+                               {**hardware._gpu_nvidia_smi(), "torch_cuda": None, "ct2_cuda": None})
                 data["gpus"] = hardware.list_gpus()          # UNA sola vez (antes se llamaba 2x)
                 data["cpu_name"] = hardware.cpu_name()
                 data["cpu_phys"], data["cpu_log"] = hardware.cpu_physical(), hardware.cpu_logical()
@@ -684,8 +685,10 @@ class App(ctk.CTk):
             back.append("Whisper✓")
         if g["torch_cuda"]:
             back.append("torch/IA✓")
-        if g["name"] and not g["torch_cuda"]:
-            back.append("torch en CPU (build +cpu)")
+        if g["torch_cuda"] is None:
+            back.append("se comprobarán al procesar o redetectar")
+        elif g["name"] and not g["torch_cuda"]:
+            back.append("torch en CPU")
         for w in self._hw_rows.winfo_children():
             w.destroy()
         rows = [

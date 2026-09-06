@@ -237,6 +237,10 @@ Los casos dudosos permanecen como solapes reales.
 
 ## 7. Master editorial
 
+Un video exportado constituye un proyecto con T0 propio. Su master derivado conserva
+el fingerprint y digest del padre y un mapa por segmentos. Solo las palabras y
+señales conservadas se transfieren, con IDs fuente; no se repite inferencia.
+
 Fuente de verdad: `<proyecto>.editorial.master.json`.
 
 El master almacena cada palabra y evento una sola vez. Los chunks son derivados que

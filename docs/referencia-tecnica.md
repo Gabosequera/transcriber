@@ -328,6 +328,19 @@ de marcas), `python vistas.py generar|dossier <master>`,
 
 ## 7. Estado actual y pendientes
 
+### Proyectos modulares — 2026-09-06, objetivo A
+
+`editorial_projects.py` deriva sub-masters por intersección con segmentos conservados,
+divide eventos y reconstruye texto/referencias sin palabras eliminadas. Conserva
+arousal, valencia/dominancia y valores de intensidad con baselines del padre.
+Exportación atómica del video junto a `projects/<ordinal>/editorial/`. Audio para RMS
+del hijo extraído con manifest y hash, sin inferencia. Ver diseño modular.
+Validación: 57 tests (FFmpeg real, dos pistas, recortes, nieto, checkpoint) y App/Tk
+real en Windows: importación, metadata, salto y zoom, inspección visual del preview.
+El smoke detectó que el arranque sí importaba modelos: `gate.vad_available` importaba
+Silero y las sondas de Ajustes cargaban torch/CT2. Ahora se comprueba presencia sin
+importarlos; el chequeo del backend ocurre al procesar o redetectar explícitamente.
+
 ### 7.0b Sesión 2026-09-06 (2ª) — Recortes: silencios, carril interactivo, AI y corte
 
 Pedido de Gabriel: que el análisis de «dónde no hay voz» NO edite nada de inmediato, sino

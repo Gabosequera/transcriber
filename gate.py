@@ -51,9 +51,8 @@ def load_breaths(breaths_json) -> list[dict]:
 
 def vad_available() -> bool:
     try:
-        import silero_vad  # noqa: F401
-        import torch  # noqa: F401
-        return True
+        from importlib.util import find_spec
+        return all(find_spec(name) is not None for name in ("silero_vad", "torch"))
     except Exception:
         return False
 

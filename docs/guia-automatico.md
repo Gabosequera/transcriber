@@ -153,6 +153,12 @@ carpetas a medias. La velocidad depende de la resolución, la duración y la CPU
 
 ## 6. Volver a un proyecto
 
+Las exportaciones nuevas incluyen `projects/001/editorial/001.editorial.master.json`
+(y uno por cada video). Importar ese hijo y abrir su master recupera solo su
+transcripción y señales, en tiempos de su propio video. `derivation.segments`
+permite volver a cada tramo del padre, incluso con recortes. Analizar silencios
+extrae audio del hijo una vez para medir RMS; no ejecuta modelos de nuevo.
+
 Importa el mismo video y pulsa **Abrir proyecto existente** para elegir su master JSON. La
 app comprueba que el video sea el mismo por contenido, carga el plan de bloques y los
 recortes, y no hace falta repetir ningún análisis. Las rutas guardadas no se usan para

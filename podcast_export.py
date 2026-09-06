@@ -200,6 +200,13 @@ def export_plan(master_path, document, source, output_dir, *, trims=None, cancel
                             "kept_seconds": round(expected, 3),
                             "removed_seconds": round(block_duration - expected, 3),
                             "segments": [[start, end] for start, end in kept]})
+            import editorial_projects
+            child_root = stage / "projects" / target.stem / "editorial"
+            child = editorial_projects.publish_child(
+                child_root, master, target, kept, parent_path=Path(master_path).resolve(),
+                final_media=destination / filename)
+            results[-1]["project_master"] = child.relative_to(stage).as_posix()
+            results[-1]["fingerprint"] = medios.fingerprint(target, actual)
         atomic_write_json(stage / "accepted-plan.json", plan)
         if trims is not None:
             atomic_write_json(stage / "accepted-trims.json", {

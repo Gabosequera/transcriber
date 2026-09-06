@@ -421,3 +421,8 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
 - Diseño agente-app (2026-07-16): aprobado, sin implementar.
 - Diferidos: batching de inferencia (HALLAZGOS-futuros.md), semillas del índice
   desde eventos VLM, torch-GPU en Windows junto a whisper.
+# 2026-09-06 — Proyectos modulares (sesión en curso)
+
+Diseño publicado antes de código. Objetivo A: exportación con sub-masters trazables
+por segmentos, señales multipista y audio RMS reanudable. 57 tests y smoke real de
+App/Tk en Windows. Corregidas importaciones pesadas descubiertas por el smoke.

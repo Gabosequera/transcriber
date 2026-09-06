@@ -988,6 +988,9 @@ class AutomaticWorkspace:
                 document = editorial_trims.new_document(fingerprint, duration)
             audio = {track_id: master.parent / "tracks" / track_id / "audio.flac"
                      for track_id in data["tracks"]}
+            if data.get("derivation"):
+                from editorial_projects import ensure_track_audio
+                audio = ensure_track_audio(master, self.info["path"], cancel=self.cancel)
             analysis = editorial_trims.analyze_silences(
                 data, audio_paths=audio, params=params, cancel=self.cancel,
                 progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
