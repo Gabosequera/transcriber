@@ -496,7 +496,7 @@ class FrameWorker:
 # continuo por sesión de play, con prefetch de scrub por ventana.
 
 VS_BUF_MAX = 8                     # frames decodificados en espera (backpressure)
-VS_FPS = 15.0                      # fps del playback del preview
+VS_FPS = 30.0                      # preview fluido; degradación si el decoder no alcanza
 VS_FPS_DEGRADADO = 10.0
 VS_GRACIA_S = 8.0                  # STARTING: tope hasta el primer frame
 VS_HAMBRE_S = 1.5                  # RUNNING: sin frames nuevos y buffer vacío → atraso
@@ -700,8 +700,7 @@ class SesionVideo:
         self._stream = VideoStream(self._video, t0, self.w, self.h, self.fps)
 
     def lista(self) -> bool:
-        """¿Ya llegó el primer frame? (warm-up A/V: el audio arranca recién acá o al
-        vencer el tope del caller)."""
+        """¿Ya llegó el primer frame? El audio espera este warm-up del video."""
         return self._stream.primer_frame_s is not None
 
     def primer_frame_s(self):
@@ -728,7 +727,7 @@ class SesionVideo:
         atrasado = (est == VideoStream.RUNNING and s.hambre() > VS_HAMBRE_S)
         if est == VideoStream.FAILED or atrasado:
             if self._respawns >= VS_RESPAWNS_MAX:
-                self._fallar("el decodificador no da abasto; el audio sigue solo"
+                self._fallar("el decodificador no da abasto; se detiene la reproducción"
                              + (f" — {s.err_tail()}" if s.err_tail() else ""))
             elif ahora - self._ultimo_respawn >= VS_COOLDOWN_S:
                 self._respawn(t)
@@ -979,6 +978,9 @@ class Reproductor:
     def __init__(self):
         self._procs: tuple[subprocess.Popen, subprocess.Popen] | None = None
         self._lock = threading.Lock()
+        self.clock = None
+        self._reader = None
+        self.error_tail = ""
 
     def play(self, video, pistas_activas: list[int], t: float = 0.0) -> str | None:
         """Reproduce las pistas (índices 0:a:N) desde `t`. Devuelve None si arrancó, o un
@@ -998,13 +1000,41 @@ class Reproductor:
                     f"{ins}amix=inputs={len(pistas_activas)}:normalize=1[mix]",
                     "-map", "[mix]"]
         mix += ["-f", "wav", "-"]
+        from playback_clock import AudioClock
+        clock = AudioClock(t)
         with self._lock:
             pf = _popen(mix, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            pp = _popen(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-"],
-                        stdin=pf.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                pp = _popen(["ffplay", "-nodisp", "-autoexit", "-sync", "audio", "-stats", "-loglevel", "info", "-"],
+                            stdin=pf.stdout, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            except Exception:
+                pf.kill()
+                pf.wait()
+                pf.stdout.close()
+                raise
             pf.stdout.close()          # el pipe queda entre los dos procesos
             self._procs = (pf, pp)
+            self.clock = clock
+            self.error_tail = ""
+        def read_clock():
+            buffer=bytearray()
+            try:
+                for value in iter(lambda: pp.stderr.read(1), b""):
+                    if value in (b"\r",b"\n"):
+                        line=buffer.decode("utf-8","replace")
+                        buffer.clear()
+                        if not clock.feed(line) and "M-A:" not in line:
+                            self.error_tail=(self.error_tail+line+"\n")[-1000:]
+                    elif len(buffer)<4096:
+                        buffer.extend(value)
+            finally:
+                pp.stderr.close()
+        self._reader = threading.Thread(target=read_clock, daemon=True, name="audio-clock")
+        self._reader.start()
         return None
+
+    def position(self):
+        return self.clock.position() if self.clock else None
 
     def playing(self) -> bool:
         with self._lock:
@@ -1013,6 +1043,7 @@ class Reproductor:
     def stop(self):
         with self._lock:
             procs, self._procs = self._procs, None
+            self.clock = None
         if not procs:
             return
         pf, pp = procs
@@ -1023,6 +1054,10 @@ class Reproductor:
                     p.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     p.kill()
+                    p.wait()
+        if self._reader:
+            self._reader.join(timeout=1)
+            self._reader=None
 
 
 import atexit

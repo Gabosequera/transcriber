@@ -96,6 +96,7 @@ def validate_layer(layer, master):
 class LayerStore:
     def __init__(self, root, master):
         self.root, self.master = Path(root), master
+        self.source_digest = source_master_digest(master)
         self.layers, self.stamps = {}, {}
         for path in sorted((self.root / "layers").glob("*.json")):
             layer = validate_layer(read_json(path), master)
@@ -150,8 +151,8 @@ def adapters(master, *, plan=None, trims=None, marks=None):
     return result
 
 
-def write_snapshot(root, master, layers):
-    value = {"schema": "editorial-layers-view/1", "source_master_digest": source_master_digest(master),
+def write_snapshot(root, master, layers, *, master_digest=None):
+    value = {"schema": "editorial-layers-view/1", "source_master_digest": master_digest or source_master_digest(master),
              "layers": layers}
     value["source_layers_digest"] = digest_json(value)
     atomic_write_json(Path(root) / "views" / "layers.json", value)
@@ -161,7 +162,7 @@ def write_snapshot(root, master, layers):
 def merge_response(store, proposal, snapshot):
     if proposal.get("schema") != PROPOSAL:
         raise ValueError("schema de respuesta de capas desconocido")
-    if proposal.get("source_master_digest") != source_master_digest(store.master):
+    if proposal.get("source_master_digest") != store.source_digest:
         raise ValueError("propuesta para otro master")
     if proposal.get("source_layers_digest") != snapshot["source_layers_digest"]:
         raise ValueError("las capas cambiaron; prepara otra revisión AI")

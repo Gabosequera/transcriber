@@ -16,11 +16,15 @@ def prepare(root, master, snapshot, *, scope=None):
     scope = scope or dict(t_ini=0, t_fin=master["media"]["duration"])
     validate_range(scope["t_ini"], scope["t_fin"], master["media"]["duration"], label="ámbito")
     request = dict(schema="editorial-topics-request/1", scope=scope,
-                   source_master_digest=editorial_chunks.source_master_digest(master),
+                   source_master_digest=snapshot["source_master_digest"],
                    source_layers_digest=snapshot["source_layers_digest"], pass_required=1)
     # Un nuevo ciclo no adopta una propuesta anterior por accidente.
     import uuid
     request["request_id"] = uuid.uuid4().hex
+    request["layer_id"] = "topics-" + digest_json(scope)[:12]
+    existing=root/'layers'/(request['layer_id']+'.json')
+    if existing.exists() and read_json(existing).get('deleted'):
+        request['layer_id'] += '-'+request['request_id'][:8]
     atomic_write_text(root / "views" / "topics-transcript.md",
                       editorial_chunks._chunk_transcript(master, scope["t_ini"], scope["t_fin"]))
     atomic_write_json(root / "views" / "topics-request.json", request)
@@ -153,7 +157,7 @@ def import_proposal(store, proposal, snapshot):
         atomic_write_json(root / "views" / "topics-request.json",request)
         write_request(root,request)
         return {"pass":1,"message":"Mapa de temas validado. Pide la segunda pasada de recurrencias a la AI."}
-    identifier = "topics-" + digest_json(request["scope"])[:12]
+    identifier = request.get("layer_id") or "topics-" + digest_json(request["scope"])[:12]
     layer = layers.new_layer(master,"Temas y subtemas",kind="topics",layer_id=identifier)
     layer.update(color="#9a70bc",items=validated["items"],analysis={"request_id":request["request_id"],
                  "pass1_digest":digest_json(previous),"pass2_digest":digest_json(validated),"scope":request["scope"]})

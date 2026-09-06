@@ -57,7 +57,7 @@ TILE_B = 1024                                  # buckets por tile de envolvente
 NIVEL_MAX = 12                                 # 2^12 = 4096 buckets/s (techo del pipe 8 kHz)
 TILES_LRU = 256                                # tiles cacheados (consenso r2 q.5)
 FCACHE_MB = 64                                 # presupuesto del caché de frames (r1.11)
-WARMUP_MAX_S = 2.0                             # tope de espera del 1er frame antes del audio
+WARMUP_MAX_S = 10.0                            # al vencer se detiene; nunca audio sin video listo
 RADIO_PUNTO = 2.0                              # s — al convertir punto→región (regla `x`)
 
 
@@ -107,6 +107,9 @@ class EditorMedios:
         self._canvas_img = None                # item persistente de imagen del preview
         self._fcache: OrderedDict = OrderedDict()      # (t_grid, W, H) → PIL (scrub)
         self._fcache_bytes = 0
+        from preview_cache import FrameCache
+        self._exact_frames = FrameCache()
+        self._wave_view_cache = OrderedDict()
         self._prefetch = medios.Prefetcher(
             lambda tok, tg, w, img: self.q.put(("fcache", tok, tg, w, img)))
         self._prefetch_after = None
@@ -117,11 +120,7 @@ class EditorMedios:
         self._preview_s = None                 # s hasta «preview listo» (r1.16)
         self._wave_s = None                    # s hasta waveforms completas
         self._preview_epoch = 0                # token de sesión de preview (r2.3)
-        self._av_offset = 0.25                 # s: el video espera al audio (r2.4)
-        try:
-            self._av_offset = float(hardware.load().get("av_offset_s", 0.25))
-        except Exception:
-            pass
+        self._play_metrics = {}
         self._wave_imgs: dict[int, object] = {}       # PhotoImage por fila (refs VIVAS)
         self._wave_keys: dict[int, tuple] = {}
         self._pista_ui: list[dict] = []        # widgets por pista (mute/solo + extra del dueño)
@@ -317,6 +316,9 @@ class EditorMedios:
         self._wave_imgs.clear()        # refs de PhotoImage del video anterior (impl h.9)
         self._fcache.clear()
         self._fcache_bytes = 0
+        self._exact_frames.clear()
+        self._wave_view_cache.clear()
+        self._envs.clear()
         self._env_prog = {}
         self._info_line = ""
         self._preview_s = self._wave_s = None
@@ -342,9 +344,10 @@ class EditorMedios:
                 for pista in info["pistas"]:
                     # 4000 buckets globales (vista «todo»); el ZOOM pide tiles aparte.
                     # Con PROGRESO a la consola (r1.15) — throttled en medios.
-                    env = medios.envolvente(path, pista["idx"], buckets=4000,
-                                            dur=info["duracion"], cancel=cancel,
-                                            progreso=lambda f, i=pista["idx"]:
+                    from preview_cache import envelope
+                    env = envelope(path, pista["idx"], fp, info["duracion"], buckets=4000,
+                                            cancel=cancel,
+                                            progress=lambda f, i=pista["idx"]:
                                             self.q.put(("envprog", gen, i, f)))
                     if cancel.is_set():
                         return
@@ -396,6 +399,13 @@ class EditorMedios:
         else:
             self._mover_linea_playhead()
         if frame and self.info and self.info.get("video") and not self._playback_activo():
+            self._t_pedido = self.t_play
+            W,_ = self._dims_preview()
+            width=min(max(480,W),self.info['video'].get('display_width',self.info['video']['width']))
+            exact=self._exact_frames.get(self.t_play,width)
+            if exact is not None:
+                self._mostrar_frame(exact)
+                return
             hit = self._fcache_hit(self.t_play)
             if hit is not None:
                 self._frame_pil = hit
@@ -497,6 +507,7 @@ class EditorMedios:
             self.status(f"⚠ No puedo reproducir: {motivo}")
             return
         self._ancla = (self.t_play, time.monotonic())
+        self._play_metrics = dict(start=self.t_play,audio_clock_ms=None)
 
     def _fcache_hit(self, t):
         """Frame prefeteado más cercano al playhead (±1 celda del grid) con las dims
@@ -981,6 +992,11 @@ class EditorMedios:
                  self._tiles_ver, pista["idx"])
         if self._wave_keys.get(fila) == clave:
             return self._wave_imgs.get(fila)
+        if clave in self._wave_view_cache:
+            self._wave_view_cache.move_to_end(clave)
+            self._wave_keys[fila]=clave
+            self._wave_imgs[fila]=self._wave_view_cache[clave]
+            return self._wave_imgs[fila]
         from PIL import Image, ImageDraw, ImageTk
         alto = LANE_H
         img = Image.new("RGB", (max(ancho, 1), alto), "#181818")
@@ -1004,6 +1020,9 @@ class EditorMedios:
         ph = ImageTk.PhotoImage(img)           # ref VIVA en self._wave_imgs (si no: blanco)
         self._wave_imgs[fila] = ph
         self._wave_keys[fila] = clave
+        self._wave_view_cache[clave]=ph
+        while len(self._wave_view_cache)>24:
+            self._wave_view_cache.popitem(last=False)
         return ph
 
     def _nivel_zoom(self, ancho) -> int:
@@ -1329,17 +1348,20 @@ class EditorMedios:
         if self._warmup is not None:
             t0, ini = self._warmup
             espera = time.monotonic() - ini
-            listo = self._vses is None or self._vses.lista() or self._vses.fallida
+            listo = self._vses is None or self._vses.lista()
             if self._vses is not None:         # mostrar el 1er frame apenas exista
                 img = self._vses.frame_para(t0)
                 if img is not None:
                     self._mostrar_frame(img)
-            if not listo and espera < WARMUP_MAX_S:
+            if not listo and espera < WARMUP_MAX_S and not (self._vses and self._vses.fallida):
                 self.f.after(50, self._anim_tick, tok)
                 return
             self._warmup = None
-            if not listo:                      # tope vencido: el audio sale igual y el
-                self.status("⏳ el video sigue preparándose…")   # stream agota su gracia
+            if not listo:
+                self._stop_preview()
+                self.btn_play.configure(text="▶")
+                self.status("No se pudo preparar el video; reproducción detenida.")
+                return
             ta = time.monotonic()
             pistas = self._activas()           # mute/solo DURANTE el warm-up vale (r3.5)
             motivo = self.repro.play(self.info["path"], pistas, t0) if pistas \
@@ -1352,6 +1374,8 @@ class EditorMedios:
             audio_ms = (time.monotonic() - ta) * 1000
             self._ancla = (t0, time.monotonic())
             pf = self._vses.primer_frame_s() if self._vses else None
+            self._play_metrics = dict(start=t0,first_frame_ms=round(pf*1000,1) if pf else None,
+                                      audio_spawn_ms=round(audio_ms,1),audio_clock_ms=None)
             self.status(f"▶ {int(t0 // 60)}:{t0 % 60:04.1f} · pistas "
                         + ("+".join(str(p + 1) for p in pistas))
                         + (f" · video {self._vses.fps:g}fps@{self._vses.w}px"
@@ -1365,8 +1389,29 @@ class EditorMedios:
             self._set_playhead(self.t_play, frame=True)   # frame EXACTO de pausa
             self._refrescar_status()           # vuelve el estado del archivo al status
             return
-        t0, reloj = self._ancla
-        self.t_play = t0 + (time.monotonic() - reloj)
+        clock_position = self.repro.position()
+        if clock_position is None:
+            if time.monotonic()-self._ancla[1] > 10:
+                error=self.repro.error_tail
+                self._stop_preview()
+                self.btn_play.configure(text="▶")
+                self.status("No hay reloj de audio fiable; reproducción detenida. " + error[-200:])
+                return
+            self.f.after(30,self._anim_tick,tok)
+            return
+        self.t_play = clock_position
+        if self._play_metrics.get("audio_clock_ms") is None:
+            self._play_metrics["audio_clock_ms"] = round(self.repro.clock.first_clock_s*1000,1)
+            self.status(f"▶ reloj de audio · 1er frame {self._play_metrics.get('first_frame_ms')} ms"
+                        f" · audio spawn {self._play_metrics.get('audio_spawn_ms')} ms"
+                        f" · audio listo {self._play_metrics['audio_clock_ms']} ms")
+            import json, app_paths
+            try:
+                app_paths.LOGS_DIR.mkdir(parents=True,exist_ok=True)
+                with (app_paths.LOGS_DIR/'reproductor.jsonl').open('a',encoding='utf-8') as log:
+                    log.write(json.dumps(self._play_metrics)+'\n')
+            except OSError:
+                pass
         if self.info and self.t_play >= self.info["duracion"]:
             self.repro.stop()
         self.lbl_t.configure(text=f"{int(self.t_play // 60)}:{self.t_play % 60:04.1f}")
@@ -1377,12 +1422,15 @@ class EditorMedios:
         else:
             self._mover_linea_playhead()
         if self._vses is not None:
-            # el reloj del VIDEO va av_offset por detrás del de pared: el audio tiene
-            # latencia de arranque que el ancla no ve (r2.4; calibrable en config.json)
-            img = self._vses.frame_para(max(0.0, self.t_play - self._av_offset))
+            img = self._vses.frame_para(self.t_play)
             if img is not None:
                 self._mostrar_frame(img)
-        self.f.after(66, self._anim_tick, tok)
+            if self._vses.fallida:
+                self._stop_preview()
+                self.btn_play.configure(text="▶")
+                self.status("El video no pudo seguir al audio; reproducción detenida.")
+                return
+        self.f.after(16, self._anim_tick, tok)
 
     # ---- pistas UI (fila de controles ALINEADA con su carril del timeline) ----
     def _armar_pistas(self):
@@ -1581,6 +1629,8 @@ class EditorMedios:
                     if t_req is not None and t_req != getattr(self, "_t_pedido", None):
                         continue
                     self._frame_pil = img      # PIL cacheado: el resize responsivo re-escala
+                    if t_req is not None:
+                        self._exact_frames.put(t_req,img)
                     self._frame_rev += 1
                     self._redibujar()
                     if t_req is None and self._carga_t0 and self._preview_s is None:

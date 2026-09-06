@@ -297,6 +297,13 @@ no hay dos copias editables. **Preparar capas para AI** publica `views/layers.js
 
 ## Límites y notas
 
+- El video sigue el reloj de salida del audio. Ya no hace falta calibrar
+  `av_offset_s`. El primer frame y la preparación del dispositivo pueden tardar;
+  la barra informa ambas latencias. Si el video o su reloj fallan, se detiene.
+- Volver a posiciones visitadas y recuperar waveforms usa cachés por contenido.
+  Los saltos nuevos todavía requieren decodificar. Ver las
+  [mediciones del VOD real](mediciones-reproductor.md).
+
 - Las emociones son estimaciones acústicas de activación, dominancia y valencia; no son
   diagnósticos ni identifican hablantes.
 - El análisis de cara, gameplay y visión no participa en este modo (es del modo Manual).

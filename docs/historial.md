@@ -423,6 +423,11 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
   desde eventos VLM, torch-GPU en Windows junto a whisper.
 # 2026-09-06 — Proyectos modulares (sesión en curso)
 
+Objetivo E: reproducción ligada al reloj de salida de FFplay y cachés de navegación.
+VOD Windows de 2 h 59 min: desfase mediano medido 1,19–1,44 s → 20–24 ms;
+salto repetido ~1.780 → 10–11 ms; zoom 25,8 → 3,9 ms. 73 tests y smoke Tk.
+Detalle reproducible y límites en `mediciones-reproductor.md`.
+
 Objetivo D: catálogo por contenido, reconstrucción automática, carpetas movibles,
 selector de versiones e importación automática de padre/hijo. 69 tests y smoke Tk.
 

@@ -19,16 +19,24 @@ class LayersController:
         self.selected = None  # layer_id, item_id, segment
         self.drag = None
         self.window = None
+        self._cache_key = None
+        self._cache = []
 
     def all(self):
         if not self.store:
             return []
         reg = self.w.editor.reg
-        return layers.adapters(self.store.master, plan=self.w.plan, trims=self.w.trims,
-                               marks=reg.marcas if reg else []) + self.store.visible()
+        key=(id(self.store),id(self.w.plan),id(self.w.trims),
+             self.w.trims.get('revision') if self.w.trims else None,
+             id(reg),reg.revision if reg else None,tuple(sorted(self.store.stamps.items())))
+        if key != self._cache_key:
+            self._cache_key=key
+            self._cache=layers.adapters(self.store.master, plan=self.w.plan, trims=self.w.trims,
+                                       marks=reg.marcas if reg else []) + self.store.visible()
+        return self._cache
 
     def snapshot(self):
-        return layers.write_snapshot(self.store.root, self.store.master, self.all())
+        return layers.write_snapshot(self.store.root, self.store.master, self.all(),master_digest=self.store.source_digest)
 
     def lanes(self):
         return [dict(nombre=layer["layer_id"], alto=34,
@@ -38,7 +46,7 @@ class LayersController:
 
     def find(self, lid, iid=None):
         layer = next(l for l in self.all() if l["layer_id"] == lid)
-        return layer, next((i for i in layer["items"] if i["item_id"] == iid), None)
+        return layer, copy.deepcopy(next((i for i in layer["items"] if i["item_id"] == iid), None))
 
     def draw(self, layer, canvas, g, y):
         editor = self.w.editor

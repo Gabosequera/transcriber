@@ -159,10 +159,10 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
 ### 3.1 El reproductor del preview (2026-07-20, diseño en three-brain-out/2026-07-20-reproductor-optimizacion/)
 
 - **Playback = streaming**: `medios.VideoStream` — UN ffmpeg persistente por sesión de
-  play (rawvideo RGB a dims exactas del letterbox, fps 15, deque acotada de 8 con
-  backpressure). `SesionVideo` = política: warm-up A/V (el audio arranca al primer
-  frame o a los 2 s; `av_offset_s` de config.json retrasa el reloj del video, default
-  0.25), atraso por reloj de arribo, respawn (cooldown 3 s, máx 4), degradación
+  play (rawvideo RGB a dims exactas del letterbox, fps 30, deque acotada de 8 con
+  backpressure). Warm-up A/V exige primer frame (tope 10 s; si falla se detiene).
+  `playback_clock.AudioClock` sigue la salida de FFplay; `av_offset_s` ya no se usa.
+  `SesionVideo` maneja atraso por reloj de arribo, respawn (cooldown 3 s, máx 4), degradación
   10fps/−25 %. El audio sigue aparte (`Reproductor`: mezcla ffmpeg → pipe → ffplay).
 - **Scrub**: `FrameWorker` (frame exacto last-wins, max_w del letterbox, MJPEG q4,
   LANCZOS en pausa) + `Prefetcher` (UN ffmpeg a 0.5 fps por ventana [t−10, t+60] →
@@ -327,6 +327,16 @@ de marcas), `python vistas.py generar|dossier <master>`,
 `python edl.py validar|render|cutview`.
 
 ## 7. Estado actual y pendientes
+
+### Reproductor — objetivo E
+
+Reloj de salida de FFplay, warm-up sin audio prematuro, preview 30 fps/tick 16 ms,
+cachés exactas acotadas y waveform persistente por contenido. VOD real de casi tres
+horas en Windows, arranques 0/30/90 min: error mediano 1,19–1,44 s → 20–24 ms,
+P95 absoluto ≤35 ms. Saltos repetidos ~1.780 → 10–11 ms; zoom 25,8 → 3,9 ms.
+Medición, límites y comandos: [mediciones-reproductor.md](mediciones-reproductor.md).
+73 unittest y smoke App/Tk; FFplay real en prueba de protocolo, dispositivo real
+en benchmark. No se promete latencia constante para seeks HEVC nuevos.
 
 ### Descubrimiento — objetivo D
 
