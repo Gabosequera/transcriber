@@ -1,4 +1,4 @@
-# Navegación tipo editor: velocidad, atajos configurables y acciones rápidas — diseño 2026-09-06
+# Navegación y edición tipo editor: velocidad, atajos, herramientas de mouse y capas de la AI — diseño 2026-09-06
 
 Estado: **diseño aprobado, sin implementar**. Parte 1 es la arquitectura; Parte 2 es el
 prompt para la AI que lo implemente, con sus salvaguardas. Todo se apoya en cómo está
@@ -177,6 +177,16 @@ vale para capas propias, recortes, bloques y marcas del autor con sus validacion
 | Deseleccionar | Esc | como hoy |
 | Deshacer / rehacer | Ctrl+Z Ctrl+Shift+Z | ver §4 |
 
+Herramientas y selección múltiple (detalle en §7 y §8):
+
+| Acción | Tecla | Detalle |
+|---|---|---|
+| Alternar herramienta Selección ↔ Corte | B | Una sola tecla de toggle: entra en Corte y, pulsada otra vez, vuelve a Selección. Acción `tools.toggle_cut`, configurable en Ajustes → Atajos como todas |
+| Volver a Selección | V | Explícita, por si se prefiere una tecla por herramienta (`tools.select`) |
+| Seleccionar todo el carril | Ctrl+A | Todos los items del carril del item seleccionado (o bajo el playhead) |
+| Mover la selección | ← → | Con items seleccionados las flechas mueven la selección ±1 fotograma (Shift ±10) y el playhead la sigue; sin selección mueven el playhead como hoy. Alt+←/→ siempre mueve la selección |
+| Sobre varios: activar/desactivar, aceptar, borrar | X A Supr | Aplican a todo el conjunto en una sola escritura (una entrada de deshacer) |
+
 #### 3.1 «Aceptado» en los recortes (tecla A)
 
 Las capas ya tienen tres estados (`proposed`, `accepted`, `disabled`), pero el
@@ -235,6 +245,13 @@ punto de escritura, así que:
 - Sin `bind_all` de `<Motion>` ni asignaciones nuevas dentro del tick. Sin
   `time.sleep` en el hilo de UI.
 - El skim a ×8 no decodifica más que fotogramas clave; ×2–×4 saltan B-frames.
+- Hit-test, hover y marquesina consultan el índice ordenado que ya existe
+  (`LayersController.visible_parts`, bisect sobre `_draw_indexes`): O(log n + k) por
+  evento aunque haya miles de recortes. Nada de recorrer `layer["items"]` entero por
+  movimiento del mouse.
+- Operaciones sobre varios items = **una** escritura por documento (`persist_many`),
+  **un** `refrescar_layout` y **una** entrada de deshacer. Mover 50 recortes no puede
+  costar 50 guardados de `trims.json`.
 - Puertas de aceptación (medidas con `tools/benchmark_preview.py --rates 1,2,3,4,8` en
   el VOD de referencia, 60 s por posición, tres posiciones):
   - ×1: desfase mediano ≤ 25 ms y P95 ≤ 35 ms (igual que hoy, sin regresión).
@@ -250,6 +267,134 @@ Experimento aparte, detrás de `preview_hwaccel` en config.json (por defecto `of
 automática a software si el stream entra en FAILED durante el warm-up. Solo se activa
 por defecto si el benchmark demuestra mejora en ×4 sin degradar ×1. Si no, queda
 documentado como «probado, sin ganancia».
+
+### 7. Edición con el mouse: dos herramientas, como en un NLE
+
+Hoy el gesto de un carril (`LayersController.gesture`) hace todo a la vez: arrastrar en
+vacío crea (y abre el diálogo), arrastrar el cuerpo mueve, arrastrar un borde estira. Se
+reemplaza por **dos herramientas explícitas**, con estado `tool` en el controlador y una
+barra pequeña en la columna libre del transporte (columna 4 de `fr_transporte`): dos
+botones tipo segmento «Selección» y «Corte». Se cambia con el mouse en la barra o con
+**una sola tecla de toggle** (`tools.toggle_cut`, por defecto B: entra en Corte y,
+pulsada de nuevo, vuelve a Selección); `tools.select` (V) vuelve siempre a Selección.
+Las dos son acciones del keymap y se reconfiguran en Ajustes → Atajos como cualquier
+otra. Esc no cambia de herramienta (solo deselecciona). El cursor del canvas cambia
+(`arrow` / `crosshair`) al pasar por un carril según la herramienta, y la barra resalta
+la activa. El scrub sobre las pistas de audio no cambia con la herramienta.
+
+**Selección (V), la predeterminada.**
+
+- Click sobre un item: lo selecciona (borde blanco). Shift+click: añade o quita del
+  conjunto. Click en vacío: deselecciona.
+- Arrastrar desde vacío: **marquesina** (rectángulo punteado sobre el canvas, tag
+  `layer-marquee`). Al soltar, quedan seleccionados los items cuyo rango corta el
+  intervalo de tiempo de la marquesina en los carriles que el rectángulo cubre
+  verticalmente. Consulta `visible_parts` por carril (bisect), nunca la lista entera.
+- Arrastrar desde un item seleccionado: mueve **todo el conjunto** el mismo delta,
+  con previsualización punteada de cada item durante el arrastre y una única
+  `persist_many` al soltar (validación de todos antes de escribir; si uno falla, no se
+  mueve ninguno y el status explica cuál).
+- Arrastrar un borde cuando hay exactamente un item seleccionado: estira, como hoy.
+- Con selección activa: X, A, Supr, Enter (solo con uno) y las flechas actúan sobre el
+  conjunto (§3). Esc vacía la selección. Ctrl+A selecciona todo el carril.
+
+**Corte (B).** Pensada para el carril de recortes, pero vale para cualquier carril
+editable; los bloques solo admiten mover límites (cobertura continua), así que en
+«Bloques» esta herramienta solo estira/encoge límites y nunca crea, resta ni divide.
+
+- Arrastrar una caja y soltar: nace un item con ese rango, **sin diálogo** (etiqueta por
+  defecto; Enter o doble click lo edita). En «recortes» el origen es `user` (naranja).
+- Si la caja empieza o termina dentro de un item existente del carril, ese item **se
+  estira** a la unión de ambos rangos. Si la caja toca varios, se funden en uno (el
+  primero sobrevive con la unión; los demás se borran). Comentarios: se conserva el del
+  superviviente; los otros se anexan al suyo separados por « · ».
+- **Shift + arrastrar = restar.** Para cada item del carril que corte la caja: si la
+  caja lo cubre entero, se borra; si toca un solo borde, se recorta ese borde; si queda
+  estrictamente dentro, el item **se divide en dos** (dos recortes, dos regiones o dos
+  tramos del item, según el carril; conservan etiqueta, comentario, estado y `accepted`).
+- **Ctrl + arrastrar desde un item = mover** ese item (aunque la herramienta sea Corte).
+  Ctrl + arrastrar en vacío hace scrub como en las pistas.
+- Un click sin arrastre (< 4 px, misma regla que las marcas) selecciona el item bajo el
+  cursor para poder usar X/A/Supr sin cambiar de herramienta.
+- Previsualización durante el gesto: caja punteada blanca (crear/estirar) o roja
+  (restar), más el contorno del resultado sobre los items afectados. Un solo redibujo
+  por evento de movimiento; el timeline completo solo se redibuja al soltar.
+- Opcional, misma fase si sale barato: imán a límites seguros (`BoundaryIndex`) dentro
+  de ±0,15 s al crear o estirar, con tecla N para alternarlo. Si complica el gesto, se
+  deja para después.
+
+Reglas comunes: cada gesto termina en `persist` / `persist_many` con las validaciones
+de siempre (`validate_items`, bloques contiguos, un rango por item en autor/recortes/
+bloques). Nada muta los documentos vivos hasta soltar. Deshacer restaura el gesto
+completo como una sola entrada.
+
+### 8. Selección múltiple en el modelo
+
+- `LayersController.selected` (la terna `(lid, item_id, segmento)`) pasa a ser el item
+  **primario** de una lista `selection: list[tuple]` ordenada por tiempo. Todo el código
+  que hoy lee `selected` sigue funcionando; el nuevo código itera `selection`.
+- Solo se seleccionan items de **un mismo carril** a la vez (X, A y Supr tienen
+  semántica por carril). Una marquesina que cubre varios carriles selecciona en el
+  carril con más items dentro; el status lo dice.
+- Semántica en lote: X → si todos están `disabled`, todos a `proposed`; si no, todos a
+  `disabled`. A → si todos están `accepted`, todos a `proposed`; si no, todos a
+  `accepted` (a los `disabled` también los activa). Supr → borra todos.
+- `persist_many(lid, items, *, delete=False)`: valida cada item, aplica todo en una copia
+  del documento, escribe una vez, refresca una vez, y empuja una sola entrada al
+  historial. Para «autor» usa `Registro.reemplazar` (§4); para «recortes»,
+  `save_document` único; para capas propias, un `store.save`.
+- Dibujo: los seleccionados se pintan como hoy (borde blanco de 2 px, handles); el
+  primario lleva además un punto en el borde superior para saber a cuál aplica Enter.
+
+### 9. Capas de la AI: temas, subtemas y cortes sugeridos
+
+Objetivo: cuando la heurística de silencios ya está revisada, pasarle a la AI la
+conversación para que separe temas y subtemas y proponga cortes de contenido, y verlo
+todo en carriles separados sin que cambie la manera de exportar.
+
+**Qué existe.** La Tarea 2 de la skill escribe `trims.proposed.json`; la app lo valida y
+funde sus cortes en el **mismo** `trims.json` con `origin: "ai"` (violeta), y la
+exportación corta la **unión** de todos los activos: heurística, AI y tuyos ya «se
+suman». La Tarea 3 produce una única capa `topics` con jerarquía por `parent_id`. Las
+respuestas de capas (`editorial-layer-proposal`) traen **una** capa y `validate_layer`
+solo acepta `kind` `user` o `topics`.
+
+**Diseño (sin cambiar la autoridad de los datos).**
+
+- **Carriles por origen para los recortes.** El adaptador `recortes` se divide en dos
+  vistas del mismo `trims.json`: `recortes-ai` («Cortes sugeridos (AI)», violeta) con
+  los cortes de origen `ai`, y `recortes` («Recortes», azul/naranja) con `silence` y
+  `user`. Mismas operaciones (mover, estirar, X, A, Supr, dividir); crear en el carril
+  de la AI produce origen `user` y por tanto aparece en el carril de abajo. La
+  exportación no cambia: unión de `enabled` de todo el documento. El campo `accepted`
+  de §3.1 vale igual para los cortes de la AI: A alterna aceptado / no aceptado.
+- **Temas arriba, subtemas debajo.** La capa `topics` se guarda como hoy (una capa,
+  jerarquía y protecciones intactas) pero `lanes()` la **presenta** como varios
+  carriles por profundidad: «Temas» (`parent_id` nulo), «Subtemas» (profundidad 1),
+  «Subtemas 2» si hubiera más niveles. El carril sabe a qué `layer_id` pertenece;
+  `persist` no cambia. Mover un tema no arrastra a sus subtemas (son items
+  independientes con rangos propios, como hoy).
+- **Orden de carriles** fijo y legible, de arriba abajo: Marcas del autor · Bloques ·
+  Temas · Subtemas · Cortes sugeridos (AI) · Recortes · capas propias y de la AI (por
+  campo `order`, editable con ▲▼ en «Capas y comentarios»). El nombre del carril se
+  pinta como hoy en la esquina.
+- **La skill puede crear las capas que necesite.** La respuesta de capas admite
+  `layers: [...]` además de `layer` (compatibilidad), cada una fundida con
+  `merge_response` y sus protecciones (items editados y borrados por el humano nunca se
+  pisan). Nuevo `kind: "ai"` en `validate_layer` para capas auxiliares de la AI
+  («Momentos», «Preguntas abiertas», lo que decida), editables como las propias y
+  borrables desde «Capas y comentarios» (la tumba persistente evita que resuciten).
+  Ninguna capa de `layers/` participa del corte: el único documento que corta es
+  `trims.json`.
+- **Un solo pedido a la AI.** Botón «Preparar revisión editorial» que escribe a la vez
+  la solicitud de temas (pasada 1, `editorial_topics.prepare`) y el paquete de revisión
+  de recortes (`write_review_package`, que ahora expone `accepted` y `origin` de cada
+  corte), y `views/editorial-agent-request.md` con el orden: Tarea 3 (dos pasadas) y
+  después Tarea 2 usando el mapa de temas como contexto, sin duplicar recortes ya
+  aceptados. La app ya importa sola cada `*.proposed.json` al aparecer (sondeo de
+  `_pump`); no hace falta un importador nuevo. La skill documenta esto como Tarea 4.
+- La barra de detalle y el tooltip muestran el origen («AI», «silencio», «tuyo») junto
+  al estado; el badge ACEPTADO ya existe.
 
 ---
 
@@ -269,8 +414,11 @@ con el código real, para y explica el conflicto antes de escribir código.
    `docs/mediciones-reproductor.md`, `playback_clock.py`, `medios.py` (VideoStream,
    SesionVideo, Prefetcher, Reproductor), `editor_medios.py` entero, `editorial_layers_ui.py`,
    `automatico_ui.py` (`_build_workspace`, `_pump`, `_export_trims`), `app.py`
-   (`_build_settings`, `_mostrar_vista`), `tests/test_playback.py`, `tests/test_layers.py`,
-   `tools/benchmark_preview.py`, `tools/smoke_editorial_ui.py`.
+   (`_build_settings`, `_mostrar_vista`), `editorial_layers.py` (LayerStore, adapters,
+   merge_response), `editorial_trims.py` (merge_proposal, write_review_package,
+   enabled_intervals), `editorial_topics.py`, `skills/transcriptor/SKILL.md`,
+   `tests/test_playback.py`, `tests/test_layers.py`, `tests/test_trims.py`,
+   `tests/test_topics.py`, `tools/benchmark_preview.py`, `tools/smoke_editorial_ui.py`.
 2. Corre la suite completa y el benchmark de referencia **sin cambiar nada** y guarda
    el JSON como `media/bench/baseline.json` (carpeta ignorada por git):
    `runtimes\win-py313-*\Scripts\python.exe -B -m unittest discover -s tests` y
@@ -295,7 +443,19 @@ con el código real, para y explica el conflicto antes de escribir código.
   validaciones existentes (`validate_items`, bloques cubren el medio, un rango por item
   en autor/recortes/bloques) se mantienen.
 - No toques `podcast_export.py`, `editorial_projects.py`, `editorial_catalog.py` ni la
-  exportación en general. No cambies el pie fijo del editor ni `LayerDetailBar`.
+  exportación en general: lo que se corta sigue siendo la unión de los `enabled` de
+  `trims.json`, sin importar en qué carril se vean ni qué capas haya en `layers/`.
+  No cambies el pie fijo del editor ni `LayerDetailBar` (solo añade el origen al texto).
+- `trims.json` sigue siendo el único documento de recortes (los dos carriles son
+  vistas por origen). La capa `topics` sigue siendo una sola capa en `layers/` (los
+  carriles por profundidad son presentación). Los cambios de esquema son aditivos
+  (`accepted`, `order`, `kind: "ai"`, `layers: [...]` en la respuesta) y todo archivo
+  antiguo debe seguir cargando sin migración.
+- Las protecciones de `merge_response` (items editados o borrados por el humano nunca
+  se pisan; tumba persistente de capas borradas) se aplican a cada capa de una
+  respuesta múltiple exactamente igual que hoy a una.
+- Nada muta un documento vivo durante un arrastre: previsualizar en el canvas, validar
+  y escribir al soltar. Un gesto que falla deja todo como estaba y lo dice en el status.
 - Windows primero: pruebas reales en esta máquina. En CI Linux solo hay numpy y SDL
   dummy: la lógica de `keymap.py`, `editorial_history.py`, `AudioClock(rate)` y la
   construcción de comandos ffmpeg debe testearse sin Tk ni customtkinter.
@@ -346,6 +506,37 @@ Ctrl+Shift+Z.
 muestra ganancia en ×4 sin regresión en ×1 y con caída a software probada; si no,
 déjalo `off` y documenta los números.
 
+**Fase 6 — selección múltiple y herramientas de mouse (§7, §8).** Primero el modelo:
+`selection` + `selected` primario, `persist_many`, semántica en lote de X/A/Supr, y
+tests puros de la aritmética de gestos (unión al estirar, fusión de varios, resta que
+recorta un borde, resta que divide, borrado por cobertura total, bloques que solo
+mueven límites) sobre documentos sintéticos de cada carril. Después la UI: barra de
+herramientas en la columna libre del transporte, acciones `tools.toggle_cut` (B, un
+toggle) y `tools.select` (V) en el keymap y visibles en Ajustes → Atajos, cursores,
+marquesina, arrastre del conjunto con previsualización, Corte con Shift y Ctrl, click
+corto que selecciona.
+Hit-test y marquesina por `visible_parts`. Smoke Tk: marquesina de 3 recortes → X → los
+tres desactivados con una sola revisión nueva de `trims.json`; arrastre del conjunto →
+un solo guardado; Shift+caja dentro de un recorte → dos recortes que conservan
+`accepted`; Ctrl+arrastre en Corte → mueve; Ctrl+Z deshace cada gesto entero. Medición:
+mover 200 recortes seleccionados ≤ 100 ms desde soltar hasta redibujado; hover con
+5.000 recortes en el carril sin tocar la lista entera (perfilar `hit`).
+
+**Fase 7 — capas de la AI (§9).** Adaptadores `recortes-ai` / `recortes` sobre el
+mismo `trims.json`; carriles por profundidad de `topics`; orden fijo de carriles y
+campo `order` con ▲▼ en «Capas y comentarios»; `kind: "ai"`; `layers: [...]` en la
+respuesta (con `layer` aún aceptado); `write_review_package` expone `accepted` y
+`origin`; botón «Preparar revisión editorial» y `views/editorial-agent-request.md`;
+Tarea 4 en `skills/transcriptor/SKILL.md` (Tarea 3 en dos pasadas, luego Tarea 2 con el
+mapa de temas, sin duplicar cortes aceptados). Tests: un `trims.json` con los tres
+orígenes se reparte en dos carriles y `enabled_intervals` no cambia; una propuesta con
+dos capas se funde respetando items editados y borrados; una capa `ai` se puede borrar
+y no resucita; una capa `topics` con dos niveles produce dos carriles y `persist` desde
+el carril «Subtemas» escribe en la misma capa; el paquete de revisión lista `accepted`.
+Smoke Tk: importar `trims.proposed.json` con cortes de AI → aparecen en el carril
+superior, A los acepta, y «Aceptar y exportar cortes» ignora los `disabled` de ambos
+carriles (verificar con `exports.json` en un medio sintético).
+
 ### Verificación obligatoria antes de cada commit
 
 - `unittest discover -s tests` completo; `tools\smoke_editorial_ui.py`;
@@ -353,8 +544,10 @@ déjalo `off` y documenta los números.
 - Comprobar en `shared\logs` que no quedan procesos ffmpeg/ffplay tras cerrar la app.
 - Actualizar docs en el mismo commit: `docs/referencia-tecnica.md` (§3.1 velocidad y
   despacho de teclas, §5 invariantes nuevos, §7 estado), `docs/guia-automatico.md`
-  (tabla de atajos completa, nota de Ajustes → Atajos), `docs/historial.md` (entrada al
-  final). Mensajes de commit en español, estilo del repo (verbo en presente, primera
+  (tabla de atajos completa, nota de Ajustes → Atajos, tabla «Trabajar en el carril»
+  con las dos herramientas, sección de carriles de la AI y del botón «Preparar revisión
+  editorial»), `skills/transcriptor/SKILL.md` (Tarea 4 y `layers: [...]`),
+  `docs/historial.md` (entrada al final). Mensajes de commit en español, estilo del repo (verbo en presente, primera
   línea ≤ 80 caracteres), con el trailer de coautoría que use el repositorio.
 - Al terminar la última fase: `VERSION` → `0.3.3` («prepara 0.3.3»). Reinstalar con
   `actualizar-release.bat` solo con la app cerrada; no crees el tag.

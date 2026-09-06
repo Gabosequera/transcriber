@@ -483,3 +483,12 @@ A = aceptado con `accepted` aditivo en trims.json sin tocar la exportación),
 deshacer/rehacer y puertas de rendimiento medidas con `benchmark_preview.py`. La
 Parte 2 es el prompt por fases con invariantes y condiciones de parada para la AI
 que lo implemente.
+
+Ampliación del mismo diseño: herramientas de mouse al estilo NLE (Selección con
+marquesina y operaciones en lote por `persist_many`; Corte que crea o estira, resta
+o divide con Shift y mueve con Ctrl, sin diálogo), y capas de la AI en carriles
+separados sin cambiar la autoridad de los datos: temas y subtemas como carriles por
+profundidad de la misma capa `topics`, cortes sugeridos de la AI como vista por
+origen del mismo `trims.json` (la exportación sigue cortando la unión de los
+activos), `kind: "ai"` y respuestas con varias capas para que la skill añada las que
+necesite, y un solo pedido «Preparar revisión editorial» (Tarea 4).

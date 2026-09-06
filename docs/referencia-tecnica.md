@@ -348,9 +348,13 @@ frente a respuestas AI posteriores, además de las correcciones y capas borradas
 Velocidad ×1–×8 (atempo + `fps=VS_FPS/rate` + skip de B-frames/claves, mismo reloj
 maestro), atajos configurables (`keymap.py` + sección Atajos), acciones de navegación
 y edición (bordes, fotograma, dividir, recortar, A = aceptado con campo `accepted`
-aditivo en trims.json), deshacer/rehacer y puertas de rendimiento medibles. Diseño y
-prompt de implementación por fases en
-[diseno-navegacion-editor.md](diseno-navegacion-editor.md). Sin código todavía.
+aditivo en trims.json), deshacer/rehacer, herramientas de mouse Selección (V: marquesina,
+selección múltiple, mover el conjunto) y Corte (B: crear/estirar, Shift resta o divide,
+Ctrl mueve) con `persist_many`, carriles de la AI (temas/subtemas por profundidad de la
+misma capa `topics`, cortes sugeridos como vista por origen del mismo `trims.json`,
+`kind: "ai"`, respuestas con varias capas, botón «Preparar revisión editorial» y Tarea 4
+de la skill) y puertas de rendimiento medibles. Diseño y prompt de implementación por
+fases en [diseno-navegacion-editor.md](diseno-navegacion-editor.md). Sin código todavía.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
