@@ -251,8 +251,23 @@ def boundary_safety(master: dict, timestamp: float) -> dict:
     return _boundary_safety(hard, utterances, timestamp)
 
 
-def _snap_boundary(master: dict, target: float, lower: float, upper: float) -> tuple[float, dict]:
-    hard, utterances = _boundary_intervals(master)
+def boundary_intervals(master: dict) -> tuple[list[dict], list[dict]]:
+    """(intervalos duros palabra/risa, intervenciones) de todas las pistas — precalcular
+    una vez cuando se ajustan muchos bordes (recortes de la AI)."""
+    return _boundary_intervals(master)
+
+
+def snap_boundary(master: dict, target: float, lower: float, upper: float, *,
+                  intervals: tuple[list[dict], list[dict]] | None = None) -> tuple[float, dict]:
+    """Punto de corte más seguro dentro de [lower, upper] cercano a `target`: primero
+    sin palabras ni risas de ninguna pista, después fuera de intervenciones, después el
+    más cercano. Devuelve (timestamp, diagnóstico)."""
+    return _snap_boundary(master, target, lower, upper, intervals=intervals)
+
+
+def _snap_boundary(master: dict, target: float, lower: float, upper: float,
+                   intervals: tuple[list[dict], list[dict]] | None = None) -> tuple[float, dict]:
+    hard, utterances = intervals if intervals is not None else _boundary_intervals(master)
     # Solo intervalos cercanos: el costo no depende del podcast completo por candidato.
     hard = [event for event in hard if event["t_fin"] >= lower - 1 and event["t_ini"] <= upper + 1]
     utterances = [event for event in utterances if event["t_fin"] >= lower and event["t_ini"] <= upper]

@@ -357,6 +357,8 @@ schema `editorial-chunks/1`, `source_master_digest` (valor de arriba), `planner`
 `t_ini`, `t_fin`, `title`, `summary`, `start_reason`, `end_reason`,
 `first_utterance_id`, `last_utterance_id`, `confidence` (0..1), `warnings` (lista).
 Los IDs de intervención se consultan en conversation.md; usa null si no hay habla.
+Opcionalmente añade `topics` y `subtopics` (listas de texto) por chunk: la segunda
+pasada de recortes de contenido los usa como mapa del bloque.
 Relee ambos lados de cada transición antes de guardar. La app validará y ajustará
 los cortes en un radio de 15 segundos sin atravesar palabras ni risas.
 Importar muestra la propuesta; aceptar exporta los bloques conservando el original.

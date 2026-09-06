@@ -1,23 +1,32 @@
-# HANDOFF — Transcriptor / pipeline de metadata para auto-clipping
+# Referencia técnica — Transcriptor (pipeline de metadata y perfil editorial)
 
+> Antes `HANDOFF.md`. Es la referencia del ESTADO ACTUAL para que otra persona u otro
+> agente continúe. La cronología está en [historial.md](historial.md); las decisiones
+> vigentes del perfil editorial, en [especificacion-editorial.md](especificacion-editorial.md);
+> el uso desde la app, en [guia-automatico.md](guia-automatico.md) y
+> [guia-manual.md](guia-manual.md).
+
+> **Actualización 2026-09-06 (2ª sesión):** RECORTES en Automático: heurística de huecos
+> sin voz + carril interactivo en el timeline (mover/estirar/crear/borrar/activar con el
+> mouse) + segunda pasada de la AI (recortes de contenido, skill Tarea 2) + «Cortar y
+> exportar» con `trim`/`concat` de FFmpeg. Nada se corta hasta ese botón. §7.0b.
+>
 > **Actualización 2026-09-06:** primer uso real de la instalación administrada en la PC
 > Windows (release 0.2.0). Arreglados el arranque (bytecode en la release) y la alineación
 > MMS bajo `pythonw`; Whisper y MMS son pasos separados y reanudables; `large-v3-turbo` es
 > el modelo por defecto (Ajustes); pasos opcionales marcables en Automático; aviso
-> retomar/reescribir al reanudar. Detalle en §7 y en `AUTOCLIP_HANDOFF.md`.
+> retomar/reescribir al reanudar. Detalle en §7 y en `historial.md`.
 >
 > **Actualización 2026-08-29:** el modo Automático ahora implementa el pipeline
 > editorial multipista de Fase 1 en `editorial_pipeline.py`. Este documento describe
 > principalmente el pipeline multimodal Manual heredado. La especificación vigente del
-> flujo nuevo está en `CAMBIO-INTERFAZ-Y-DISTRIBUCION.md`. El chunking automático usa
+> flujo nuevo está en `especificacion-editorial.md`. El chunking automático usa
 > `codex_chunker.py` + `codex exec` para leer la conversación completa; no se rige por
 > los comandos históricos de Codex documentados más abajo para reviews de desarrollo.
 
-Referencia técnica del ESTADO ACTUAL para que otro agente continúe.
-Última reescritura completa: 2026-07-20; última actualización: 2026-09-06 (instalación
-Windows real: arranque, MMS, reanudación y ajustes del perfil editorial). El historial cronológico
-(qué se hizo, cuándo y por qué) vive en `AUTOCLIP_HANDOFF.md`. Originales
-pre-reescritura en `docs-archivo/`.
+Última reescritura completa: 2026-07-20; última actualización: 2026-09-06 (recortes en
+Automático; instalación Windows real). El historial cronológico (qué se hizo, cuándo y por
+qué) vive en `historial.md`. Los diseños y reviews (`three-brain-out/<fecha-tema>/`) y los originales pre-reescritura (`docs-archivo/`) viven en el checkout Linux de desarrollo; están en `.gitignore` y no forman parte del repositorio ni de la release.
 
 ---
 
@@ -27,8 +36,11 @@ App de escritorio (Python 3.13 + customtkinter) que Gabriel (canal "El Grafo") u
 convertir sus grabaciones largas (gameplay/reacción, OBS multitrack) en metadata rica
 que una IA ("Ava", vía la skill /clipear) usa para cortar clips de TikTok/Shorts sola.
 
-Desarrollada en Linux (`/mnt/data/transcriber`), corre también en una PC Windows como
-carpeta PORTABLE. Cinco pestañas:
+Desarrollada en Linux (`/mnt/data/transcriber`), corre también en Windows como instalación
+administrada (§4). La app abre en modo **Automático** (perfil editorial de
+`especificacion-editorial.md`, implementado en `editorial_pipeline.py` + `automatico_ui.py`);
+el modo **Manual**, que describe el resto de esta sección, tiene cuatro pestañas y Ajustes
+en el menú ⋮:
 
 1. **Transcribir** — faster-whisper (GPU/CPU) + alineador forzado MMS (timestamps de
    palabra ~50 ms, la base de TODO el pipeline). Salidas: words/segments/srt/cues.
@@ -137,6 +149,8 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
 | wizard_extraer.py | pestaña Extraer metadata (wizard de 3 pasos sobre EditorMedios) |
 | marcar.py | pestaña Marcar: master por fingerprint + carriles + guion + paquete |
 | pipeline.py | orquestador DAG transaccional con resume |
+| editorial_trims.py | RECORTES: heurística de huecos sin voz (+ actividad RMS por pista), documento `views/trims.json`, validación/merge de `trims.proposed.json` de la AI, paquete de revisión por bloque, unión de intervalos y segmentos conservados |
+| podcast_export.py | exportación de bloques (plan) y de bloques recortados (`trim`/`atrim` + `concat` por script de filtros; sondea `-/filter_complex` vs `-filter_complex_script`) |
 | medios.py | ffprobe/fingerprint/FLAC/waveform/frames/Job Object + reproductor del preview (§3.1) |
 | hardware.py | config global (config.json) + detección CPU/GPU/hilos |
 | audiocache.py / jobs.py / models.py | caché de audio, lock de jobs, unload de modelos |
@@ -221,8 +235,10 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   confirmar su arranque con un nonce; si falla, vuelve a la anterior.
 - Un cambio de código reutiliza el runtime. Un cambio de dependencias crea otro runtime,
   pero jamás vuelve a descargar pesos presentes en `shared/cache` o `shared/models`.
-- El runtime Windows usa torch/torchaudio 2.9.1 con CUDA 12.8: soporta las RTX
-  3050/4070 y añade soporte Blackwell para la RTX 5080.
+- El runtime Windows usa torch/torchaudio 2.8.0 con CUDA 12.8 (índice cu128; se fijan
+  juntos porque el alineador MMS usa `torchaudio.functional.forced_align`, retirado en
+  versiones posteriores — `tools/build_release.py` es la fuente de verdad): soporta las RTX
+  3050/4070 y Blackwell (RTX 5080).
 - REGLA WINDOWS: los modelos torch corren en CPU (`hardware.use_gpu_torch()` = False
   en nt) — torch y CTranslate2 chocan por cuDNN si comparten GPU (crash nativo
   diagnosticado). Whisper sí usa GPU (carril CTranslate2 independiente). Flag
@@ -290,6 +306,10 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
 
 ## 6. Cómo verificar (headless)
 
+En Windows (instalación administrada): `runtimes\win-py313-*\Scripts\python.exe -B -m unittest discover -s tests`, con
+`shared\tools\ffmpeg` en el PATH para que corran los tests de exportación (54 tests el
+2026-09-06). En Linux:
+
 ```bash
 cd /mnt/data/transcriber
 .venv/bin/python -m py_compile app.py pipeline.py vision.py marcas.py medios.py \
@@ -307,6 +327,77 @@ de marcas), `python vistas.py generar|dossier <master>`,
 `python edl.py validar|render|cutview`.
 
 ## 7. Estado actual y pendientes
+
+### 7.0b Sesión 2026-09-06 (2ª) — Recortes: silencios, carril interactivo, AI y corte
+
+Pedido de Gabriel: que el análisis de «dónde no hay voz» NO edite nada de inmediato, sino
+que proponga tramos «de aquí a aquí» visibles en el timeline (sistema de capas/selección
+existente), ajustables con el mouse; que la AI haga una segunda pasada editorial sobre el
+bloque ya acortado; y que solo un botón «cortar» aplique todo. Implementado y verificado
+con tests (54 OK, incluida exportación real con FFmpeg) y smoke de la UI real con gestos
+simulados:
+
+- **`editorial_trims.py`** (nuevo): `analyze_silences(master, audio_paths, params)` une
+  palabras (colchón 0.10/0.20 s) y risas (0.25 s) de TODAS las pistas, saca huecos ≥
+  `min_gap` (default 1.0 s, incluidos aire inicial/final), conserva `keep_before/after`
+  (0.3 s) y mide la ACTIVIDAD RMS del hueco por pista (`medios.envolvente` sobre
+  `tracks/<id>/audio.flac`, buckets de 50 ms, piso = percentil 20): huecos con más de 12 dB
+  sobre el piso quedan propuestos pero DESACTIVADOS (confianza 0.4). Documento
+  `views/trims.json` (`editorial-trims/1`, identidad = fingerprint del medio, no digest del
+  master): recortes con `origin` silence/ai/user, `enabled`, `edited`, `reason`,
+  `evidence`. `apply_silence_analysis` reemplaza solo los de silencio NO editados y
+  conserva ids + estado activado de los huecos idénticos. `enabled_intervals` = UNIÓN de
+  los activos (se permiten solapes); `kept_segments` = complemento dentro de un bloque
+  (restos < 0.1 s se funden). `BoundaryIndex` (bisect) avisa bordes dentro de
+  palabra/risa. Propuesta de la AI `views/trims.proposed.json`
+  (`editorial-trims-proposal/1`, exige `source_master_digest`): `validate_proposal` ajusta
+  cada borde hasta 1.5 s con `editorial_chunks.snap_boundary` (público, con intervalos
+  precalculados), valida `chunk_id`/utterances, avisa sin motivo; `merge_proposal`
+  reemplaza los recortes de la AI no editados (idempotente por digest). Paquete de revisión:
+  `views/trim-agent-request.md` + `chunks/<id>/trim-review.md` (o `views/trim-review.md`
+  sin plan) = conversación del bloque con `⟂ RECORTE` intercalados + tema/resumen/
+  topics/subtopics del chunk.
+- **`podcast_export.export_plan(..., trims=)`**: por bloque calcula los segmentos
+  conservados y arma un script `split`/`trim`/`setpts=PTS-S/TB` (NO `STARTPTS`: una pista
+  con offset OBS conserva su desfase en el primer segmento) + `concat` (rellena con
+  silencio el redondeo A/V por segmento → sin deriva). Script por archivo (límite de
+  32k de la línea de comandos en Windows); `filter_script_option()` sondea
+  `-/filter_complex` (FFmpeg ≥ 7; el build 2026 ya no tiene `-filter_complex_script`).
+  `-t` de ENTRADA limita la lectura al bloque. `document=None` → un bloque con todo el
+  medio (`editorial_trims.whole_plan`). Carpeta `podcast-<digest(plan+recortes)>` con
+  `accepted-trims.json`; tolerancia de duración = 2 frames + 1 frame por segmento.
+- **`editor_medios.py`**: hooks nuevos y genéricos — un carril extra puede declarar
+  `gesto(fase, e, g, y0)` (press/motion/release/doble; si `press` devuelve True captura el
+  botón izquierdo y no mueve el playhead) y el dueño `teclas_extra(e)` se consulta antes
+  que las marcas; `_carril_en(y)`; tecla Escape bindeada.
+- **`automatico_ui.py`**: carril «recortes» (26 px, debajo del de bloques): azul =
+  silencio, violeta = AI, naranja = usuario; desactivado = contorno punteado; seleccionado
+  = borde blanco + handles; borde rojo = cae dentro de palabra/risa; proyección rayada
+  sobre las pistas; LOD por píxel a partir de 400 recortes visibles. Gestos: click
+  selecciona, arrastrar mueve, bordes del seleccionado estiran, arrastre en vacío crea
+  (naranja), doble click y `X` activan/desactivan, `Supr` borra, `Esc` deselecciona,
+  hover = tooltip, click derecho = menú (activar, borrar, ir al inicio/final, escuchar
+  desde 2 s antes, crear 1 s). Cada mutación persiste `trims.json` (atómico). Panel
+  RECORTES: «Analizar silencios» (mín/margen), estado, «Preparar revisión AI», «✂ Cortar
+  y exportar», «Saltar recortes al reproducir» (re-arranca la sesión al final del recorte
+  activo; ayuda de revisión, no el render). `Importar JSON de la AI` enruta por `schema`;
+  el poll de 2 s también detecta `trims.proposed.json`. Los recortes se cargan al terminar
+  la corrida o al abrir proyecto (hilo silencioso: valida identidad + arma el índice).
+- **Skill `skills/transcriptor/SKILL.md`**: Tarea 1 (bloques; ahora pide `topics`/
+  `subtopics`) y Tarea 2 (recortes de contenido): NO proponer recortes por humor subido de
+  tono, lisuras, términos discriminatorios ni comentarios ofensivos (post lo quita);
+  criterio = aporte a la conversación (tangentes, balbuceo, arranques en falso, charla
+  técnica); conservar diversión, continuidad y setups; ante la duda no recortar.
+- Tests nuevos `tests/test_trims.py` (13): heurística, actividad, reanálisis, documento,
+  unión/segmentos, propuesta (snap, rechazos, merge idempotente), paquete de revisión,
+  script de filtros y exportación real (recortes frame-accurate, 2 pistas con offset,
+  recorte que cruza la frontera de bloques). Para correrlos en esta PC hay que poner
+  `shared\tools\ffmpeg` en el PATH (fuera de la release, `app_paths.TOOLS_DIR` apunta a
+  `tools/`; sin ffmpeg esos tests se saltan).
+
+Pendiente: probar con el VOD real (calibrar `min_gap`/margen y el umbral de actividad de
+12 dB con audio de verdad); Linux con ffmpeg < 7 usa `-filter_complex_script` (sondeo, no
+verificado allí todavía).
 
 ### 7.0 Sesión 2026-09-06 — instalación Windows real (release 0.2.0)
 

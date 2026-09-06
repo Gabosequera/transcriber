@@ -83,14 +83,19 @@ La release no se publica si esa instalación integral falla.
 
 ## Diagnóstico
 
-`diagnostico.bat` deja la consola visible. Los demás registros están en `shared\logs` y
-el estado del updater en `state\update-status.json`.
+`diagnostico.bat` deja la consola visible. Los demás registros están en `shared\logs`
+(`arranque.log`, `salida.log` con la salida que sin consola iría a stdout/stderr,
+`startup-error.log`) y el estado del updater en `state\update-status.json`.
+
+Para reinstalar la release desde el código fuente de la misma carpeta (desarrollo en la
+PC Windows, sin descargar nada): cierra la app y ejecuta `actualizar-release.bat`.
 
 ## Podcasts y cortes externos
 
 El modo Automático extrae voz y espera el plan de una AI externa; no requiere Codex
 CLI para procesar. La skill se distribuye en `skills/transcriptor/SKILL.md` dentro de
-la release. Consulta el flujo y los archivos en README.md.
+la release, igual que la documentación de `docs/`. El flujo completo (bloques, recortes,
+segunda pasada de la AI y exportación) está en [docs/guia-automatico.md](docs/guia-automatico.md).
 
 Torch y TorchAudio se fijan juntos en 2.8.0 (CUDA 12.8), porque el alineador MMS usa
 `forced_align`, retirado en versiones posteriores. El verificador ejecuta una pequeña

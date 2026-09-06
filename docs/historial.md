@@ -1,10 +1,11 @@
-# AUTOCLIP — Historial del proyecto (timeline)
+# Historial del proyecto (timeline)
 
-Cronología de cómo se construyó el pipeline de auto-clipping, del período más viejo
-(arriba) al más nuevo (abajo). La referencia técnica del estado ACTUAL está en
-`HANDOFF.md`. Los documentos originales pre-reescritura (2026-07-20) están en
-`docs-archivo/`. Los diseños y reviews completos de cada etapa viven en
-`three-brain-out/<fecha-tema>/`.
+> Antes `AUTOCLIP_HANDOFF.md`.
+
+Cronología de cómo se construyó el proyecto (auto-clipping primero, perfil editorial de
+podcasts después), del período más viejo (arriba) al más nuevo (abajo). La referencia
+técnica del estado ACTUAL está en [referencia-tecnica.md](referencia-tecnica.md).
+Los diseños y reviews (`three-brain-out/<fecha-tema>/`) y los originales pre-reescritura (`docs-archivo/`) viven en el checkout Linux de desarrollo; están en `.gitignore` y no forman parte del repositorio ni de la release.
 
 La visión: Gabriel graba VODs largos (gameplay/reacción, OBS multitrack, canal
 "El Grafo"); la app extrae TODA la metadata (voz, audio del juego, cara, pantalla,
@@ -244,7 +245,7 @@ editor, y preparar la app para la PC Windows.
   en ambas lanes; la skill documenta los campos (hablando_a_camara = hook natural).
 
 ### Reescritura de los handoffs
-- HANDOFF.md pasó a ser la referencia del estado actual; este archivo, el timeline.
+- referencia-tecnica.md pasó a ser la referencia del estado actual; este archivo, el timeline.
   Originales en docs-archivo/.
 
 ---
@@ -380,9 +381,33 @@ verdad; el .md se regenera; solo el texto libre del guion pertenece al archivo.
 
 ---
 
+## 2026-09-06 (2ª sesión) — Recortes: silencios propuestos, carril interactivo, AI y corte
+
+- Pedido: reutilizar la idea de «cortar donde no hay voz» del modo Manual, pero dentro de
+  Automático, sobre el timeline, como PROPUESTAS «de qué punto a qué punto» que se ven,
+  se mueven, se quitan o se agregan con el mouse, y que solo se apliquen al pulsar cortar.
+  Flujo: analizar (Whisper/risa/intensidad) → bloques de 30–45 min → temas/subtemas →
+  heurística de huecos sin voz → revisión humana → segunda pasada de la AI (recortes de
+  contenido que no aporta, sin tocar humor fuerte ni lisuras) → revisión → «Cortar».
+- `editorial_trims.py`: huecos sin palabras ni risas en NINGUNA pista + medición de
+  actividad RMS por pista (los huecos con actividad quedan propuestos pero desactivados);
+  `views/trims.json` revisable; propuesta de la AI validada y con bordes ajustados;
+  paquete de revisión por bloque (`trim-review.md` con `⟂ RECORTE`).
+- Timeline: carril «recortes» con hooks nuevos del mini-editor (gesto por carril + teclas
+  del dueño); colores por origen, handles, tooltip, menú contextual, proyección sobre las
+  pistas, «saltar recortes al reproducir».
+- Exportación: `trim`/`atrim` + `concat` por script de filtros (offsets de pistas
+  preservados, sin deriva A/V, sondeo `-/filter_complex` para el ffmpeg 2026).
+- Skill /transcriptor con la Tarea 2 (criterio editorial + prohibición explícita de
+  recortar por contenido ofensivo). 54 tests OK; smoke de la UI real con gestos simulados.
+
+---
+
 ## Pendientes al cierre de este período
 
 - Primera corrida editorial completa con el VOD real en Windows y publicar `v0.2.1`.
+- Recortes con el VOD real: calibrar hueco mínimo/margen y el umbral de actividad; primera
+  Tarea 2 real de la AI; verificar el sondeo de `-/filter_complex` en Linux (ffmpeg < 7).
 
 - Detector de risas: filtro por confianza (falsos positivos con contenido real).
 - Primer VOD real con visión activada (iterar prompts v2 con contenido real).

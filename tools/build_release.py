@@ -14,7 +14,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[1]
 VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 ROOT_FILES = {
-    "VERSION", "README.md", "INSTALL-WINDOWS.md", "CAMBIO-INTERFAZ-Y-DISTRIBUCION.md",
+    "VERSION", "README.md", "INSTALL-WINDOWS.md",
     "LICENSE.md", "COMMERCIAL-LICENSE.md",
     "requirements-windows.txt", "requirements.txt", "icon.png", "icon.svg",
     "update-channel.json",
@@ -40,6 +40,7 @@ def source_files() -> list[Path]:
     files = [path for path in PROJECT.glob("*.py") if path.is_file()]
     files.extend(PROJECT / name for name in sorted(ROOT_FILES) if (PROJECT / name).is_file())
     files.extend((PROJECT / "skills").glob("*/SKILL.md"))
+    files.extend((PROJECT / "docs").glob("*.md"))      # la documentación viaja con la release
     return sorted(set(files), key=lambda path: path.name.casefold())
 
 

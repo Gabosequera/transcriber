@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import queue
 import threading
+import time
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 from tkinter import messagebox
 
@@ -11,6 +13,7 @@ import customtkinter as ctk
 import dialogs
 import editorial_chunks
 import editorial_pipeline
+import editorial_trims
 import hardware
 import podcast_export
 import medios
@@ -29,6 +32,13 @@ ACCENT_HOVER = "#2d9168"
 MEDIA_FILTERS = [("Audio o video", ["*.mp4", "*.mov", "*.mkv", "*.webm", "*.wav",
                                       "*.flac", "*.m4a", "*.mp3", "*.ogg", "*.opus"]),
                  ("Todos", ["*"])]
+
+# ---- carril «recortes»: colores por origen (silencio / AI / usuario) ----
+TRIMS_H = 26
+COL_TRIM = {"silence": "#3b8fb3", "ai": "#a06cd5", "user": "#e8a33d"}
+COL_TRIM_LOD = {True: "#3b8fb3", False: "#2b3d46"}
+TRIM_ORIGIN_LABEL = {"silence": "silencio", "ai": "AI", "user": "tuyo"}
+TRIM_LOD_MAX = 400                     # hasta acá se dibuja cada recorte por separado
 
 
 class ChunkReviewDialog(ctk.CTkToplevel):
@@ -218,7 +228,7 @@ class ResumeDialog(ctk.CTkToplevel):
 
 
 class AutomaticWorkspace:
-    """Importación, selección multipista y ejecución del perfil editorial."""
+    """Importación, selección multipista, ejecución del perfil editorial, bloques y recortes."""
 
     def __init__(self, parent):
         self.info = None
@@ -230,8 +240,21 @@ class AutomaticWorkspace:
         self.result: dict | None = None
         self.plan: dict | None = None
         self._last_plan_stamp = None
+        self._last_trims_stamp = None
         self._poll_counter = 0
         self.review_dialog = None
+        # ---- recortes (carril interactivo; documento views/trims.json) ----
+        self.trims: dict | None = None
+        self.trims_path: Path | None = None
+        self.sel_cut: dict | None = None
+        self._drag_cut: dict | None = None
+        self._trim_starts: list[float] = []
+        self._trim_pme: list[float] = []
+        self._boundary_index: editorial_trims.BoundaryIndex | None = None
+        self._skip_intervals: list[tuple[float, float]] = []
+        self._last_skip: tuple[int, float] | None = None
+        self._review_stale = False
+        self._tt_items: list = []
 
         self.f = ctk.CTkFrame(parent, fg_color=BG, corner_radius=0)
         self.f.grid_columnconfigure(0, weight=1)
@@ -266,8 +289,14 @@ class AutomaticWorkspace:
         self.editor = EditorMedios(body, ancho_ctl=390,
                                    controles_pista_extra=self._build_track_controls,
                                    on_video_cargado=self._on_media_loaded,
-                                   carriles_extra=self._cut_lanes)
+                                   carriles_extra=self._cut_lanes,
+                                   on_playhead=self._on_playhead,
+                                   teclas_extra=self._trim_keys)
         self.editor.f.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        # hover = tooltip del recorte · click derecho = menú · click en MARCAS deselecciona
+        self.editor.tl.bind("<Motion>", self._trim_hover, add=True)
+        self.editor.tl.bind("<Button-3>", self._trim_menu, add=True)
+        self.editor.tl.bind("<Button-1>", self._after_editor_press, add=True)
 
         panel = ctk.CTkFrame(body, width=292, fg_color=SURFACE, corner_radius=10,
                              border_width=1, border_color=BORDER)
@@ -349,23 +378,78 @@ class AutomaticWorkspace:
                                            state="disabled", fg_color=SURFACE_RAISED,
                                            hover_color="#2a322d", command=self._review_chunks)
         self.chunks_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
-        self.agent_button = ctk.CTkButton(panel, text="Importar plan JSON externo", height=28,
+        self.agent_button = ctk.CTkButton(panel, text="Importar JSON de la AI", height=28,
                                           state="disabled", fg_color=SURFACE_RAISED,
-                                          hover_color="#2a322d", command=self._import_agent_chunks)
+                                          hover_color="#2a322d", command=self._import_external_json)
         self.agent_button.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self._build_trims_panel(panel, row=9)
         self.accept_button = ctk.CTkButton(panel, text="Aceptar y exportar cortes", height=32,
                                            state="disabled", fg_color=ACCENT,
                                            command=self._accept_cuts)
-        self.accept_button.grid(row=9, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.accept_button.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.open_project_button = ctk.CTkButton(panel, text="Abrir proyecto existente", height=28,
                                                 fg_color=SURFACE_RAISED,
                                                 command=self._open_project)
-        self.open_project_button.grid(row=10, column=0, sticky="ew", padx=14, pady=(0, 6))
+        self.open_project_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
         self.run_button = ctk.CTkButton(panel, text="Procesar pistas de voz", height=38,
                                         state="disabled", fg_color=ACCENT,
                                         hover_color=ACCENT_HOVER, command=self._run_or_cancel,
                                         font=ctk.CTkFont(size=13, weight="bold"))
-        self.run_button.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 14))
+        self.run_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 14))
+
+    def _build_trims_panel(self, panel, *, row: int):
+        """Sección RECORTES: heurística de silencios, revisión para la AI y corte final.
+        Nada de esto toca el video hasta «Cortar y exportar»."""
+        box = ctk.CTkFrame(panel, fg_color=SURFACE_RAISED, corner_radius=8)
+        box.grid(row=row, column=0, sticky="ew", padx=14, pady=(0, 6))
+        box.grid_columnconfigure(0, weight=1)
+        head = ctk.CTkFrame(box, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 2))
+        head.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(head, text="RECORTES", text_color=MUTED,
+                     font=ctk.CTkFont(size=10, weight="bold")).grid(row=0, column=0, sticky="w")
+        for column, (origin, label) in enumerate((("silence", "silencio"), ("ai", "AI"),
+                                                  ("user", "tuyos")), 1):
+            ctk.CTkLabel(head, text=f"■ {label}", text_color=COL_TRIM[origin],
+                         font=ctk.CTkFont(size=9, weight="bold")).grid(row=0, column=column,
+                                                                        padx=(6, 0))
+        line = ctk.CTkFrame(box, fg_color="transparent")
+        line.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
+        line.grid_columnconfigure(0, weight=1)
+        self.silence_button = ctk.CTkButton(line, text="Analizar silencios", height=26,
+                                            state="disabled", fg_color="#24566a",
+                                            hover_color="#2b6a82", command=self._analyze_silences)
+        self.silence_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkLabel(line, text="mín", text_color=MUTED, font=ctk.CTkFont(size=10)).grid(
+            row=0, column=1, padx=(2, 2))
+        self.min_gap_entry = ctk.CTkEntry(line, width=40, height=24, font=ctk.CTkFont(size=11))
+        self.min_gap_entry.insert(0, "1.0")
+        self.min_gap_entry.grid(row=0, column=2)
+        ctk.CTkLabel(line, text="margen", text_color=MUTED, font=ctk.CTkFont(size=10)).grid(
+            row=0, column=3, padx=(4, 2))
+        self.margin_entry = ctk.CTkEntry(line, width=40, height=24, font=ctk.CTkFont(size=11))
+        self.margin_entry.insert(0, "0.3")
+        self.margin_entry.grid(row=0, column=4)
+        self.trims_status = ctk.CTkLabel(box, text="Sin recortes. Analiza silencios o arrastra "
+                                                   "en el carril «recortes» del timeline.",
+                                         text_color=MUTED, anchor="w", justify="left",
+                                         wraplength=246, font=ctk.CTkFont(size=10))
+        self.trims_status.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
+        buttons = ctk.CTkFrame(box, fg_color="transparent")
+        buttons.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 4))
+        buttons.grid_columnconfigure((0, 1), weight=1)
+        self.review_button = ctk.CTkButton(buttons, text="Preparar revisión AI", height=26,
+                                           state="disabled", fg_color="#4a3a5e",
+                                           hover_color="#5a4772", command=self._prepare_review)
+        self.review_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self.trim_export_button = ctk.CTkButton(buttons, text="✂ Cortar y exportar", height=26,
+                                                state="disabled", fg_color="#8a5a24",
+                                                hover_color="#a06a2b", command=self._export_trims)
+        self.trim_export_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        self.skip_check = ctk.CTkCheckBox(box, text="Saltar recortes al reproducir", height=20,
+                                          checkbox_width=14, checkbox_height=14,
+                                          text_color="#c6cec9", font=ctk.CTkFont(size=10))
+        self.skip_check.grid(row=4, column=0, sticky="w", padx=10, pady=(0, 6))
 
     def set_default_model(self, value: str):
         """Sigue al modelo por defecto de Ajustes (sin tocar una corrida en curso)."""
@@ -405,7 +489,16 @@ class AutomaticWorkspace:
         self.result = None
         self.plan = None
         self._last_plan_stamp = None
+        self._last_trims_stamp = None
         self.track_widgets = []
+        self.trims = None
+        self.trims_path = None
+        self.sel_cut = None
+        self._drag_cut = None
+        self._boundary_index = None
+        self._review_stale = False
+        self._reindex_trims()
+        self._refresh_trims_status()
         source = Path(info["path"])
         self.project_title.configure(text=source.stem)
         self.project_status.configure(text=f"AUTOMÁTICO · {len(info['pistas'])} PISTAS DE AUDIO")
@@ -414,7 +507,8 @@ class AutomaticWorkspace:
         self.output_entry.insert(0, str(default))
         self.pipeline_title.configure(text="Selecciona las pistas de voz")
         self.run_button.configure(state="normal")
-        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button):
+        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
+                       self.silence_button, self.review_button, self.trim_export_button):
             button.configure(state="disabled")
 
     def _selected_tracks(self) -> list[dict]:
@@ -434,13 +528,18 @@ class AutomaticWorkspace:
         self.model_menu.configure(state=state)
         for check in self.step_checks.values():
             check.configure(state=state)
-        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button):
+        for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
+                       self.silence_button, self.review_button, self.trim_export_button):
             button.configure(state="disabled")
         if not active:
             self._refresh_plan_buttons()
         for widget in self.track_widgets:
             widget["selected"].configure(state=state)
             widget["label"].configure(state=state)
+
+    def _background_done(self):
+        self._set_processing(False)
+        self.run_button.configure(text="Reanudar / actualizar", state="normal")
 
     def _run_or_cancel(self):
         if self.worker and self.worker.is_alive():
@@ -548,22 +647,31 @@ class AutomaticWorkspace:
                     self.run_button.configure(text="Reanudar / actualizar", state="normal")
                     self._load_saved_plan()
                     self._refresh_plan_buttons()
+                    self._load_trims_async()
                     self._append_log(f"Listo: {self.result['master']}")
                     self._append_log(f"Planificador: {self.result.get('chunk_planner', 'desconocido')}")
                 elif kind == "review_ready":
-                    self._set_processing(False)
-                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self._background_done()
                     self.review_dialog = ChunkReviewDialog(self.f, event["path"],
                         on_saved=self._load_saved_plan, master=event["master"], document=self.plan)
                 elif kind == "plan_loaded":
                     self.plan = event["plan"]
+                    self._review_stale = bool(self.trims and self.trims["cuts"])
                     self.editor.refrescar_layout()
-                    self._set_processing(False)
-                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self._background_done()
+                    self._refresh_trims_status()
                     self._append_log(f"Propuesta lista: {len(self.plan['chunks'])} bloques. Revisa el carril de colores antes de aceptar.")
+                elif kind == "trims_loaded":
+                    self._on_trims_loaded(event)
+                elif kind == "review_written":
+                    self._review_stale = False
+                    self._background_done()
+                    self._refresh_trims_status()
+                    self._append_log("Revisión para la AI lista: " + str(event["request"]))
+                    self._append_log("Pide a la AI la Tarea 2 de la skill transcriptor; su "
+                                     "trims.proposed.json se importa solo al aparecer.")
                 elif kind == "export_done":
-                    self._set_processing(False)
-                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self._background_done()
                     self.progress.set(1)
                     self._append_log(f"Videos exportados: {event['path']}")
                     self.pipeline_title.configure(text="Cortes exportados")
@@ -582,6 +690,7 @@ class AutomaticWorkspace:
                     self.output_entry.insert(0, str(Path(self.result["master"]).parent.parent))
                     self.editor.refrescar_layout()
                     self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self._load_trims_async()
                 elif kind == "ui_error":
                     cancelled = self.cancel.is_set()
                     self._set_processing(False)
@@ -594,16 +703,23 @@ class AutomaticWorkspace:
         if (self._poll_counter % 20 == 0 and self.result
                 and not (self.worker and self.worker.is_alive())
                 and not (self.review_dialog and self.review_dialog.winfo_exists())):
-            path = Path(self.result["master"]).parent / "views" / "cuts.proposed.json"
-            try:
-                stat = path.stat()
-                stamp = (str(path), stat.st_mtime_ns, stat.st_size)
-                if stamp != self._last_plan_stamp:
-                    self._last_plan_stamp = stamp
-                    self._import_plan(path, reuse_proposal=True)
-            except OSError:
-                pass
+            views = Path(self.result["master"]).parent / "views"
+            self._poll_proposal(views / "cuts.proposed.json", "_last_plan_stamp",
+                                lambda path: self._import_plan(path, reuse_proposal=True))
+            self._poll_proposal(views / "trims.proposed.json", "_last_trims_stamp",
+                                self._import_trims)
         self.f.after(100, self._pump)
+
+    def _poll_proposal(self, path: Path, attribute: str, action):
+        """La AI escribe su JSON fuera de la app: se importa solo cuando aparece o cambia."""
+        try:
+            stat = path.stat()
+        except OSError:
+            return
+        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
+        if stamp != getattr(self, attribute):
+            setattr(self, attribute, stamp)
+            action(path)
 
     def _master_path(self) -> Path | None:
         if self.result:
@@ -637,16 +753,25 @@ class AutomaticWorkspace:
             self._background(lambda: self.events.put({"tipo": "review_ready", "path": master,
                                                       "master": read_json(master)}))
 
-    def _import_agent_chunks(self):
+    def _import_external_json(self):
+        """Un solo botón para los dos contratos: el schema del archivo decide."""
         master = self._master_path()
         if not master:
             return
-        path = dialogs.open_file("JSON de chunks generado por el agente",
+        path = dialogs.open_file("JSON generado por la AI (bloques o recortes)",
                                  [("JSON", ["*.json"]), ("Todos", ["*"])],
                                  remember="editorial_chunks")
         if not path:
             return
-        self._import_plan(Path(path))
+        try:
+            schema = read_json(path).get("schema")
+        except Exception as error:
+            messagebox.showerror("JSON inválido", str(error))
+            return
+        if schema == editorial_trims.SCHEMA_PROPOSAL:
+            self._import_trims(Path(path))
+        else:
+            self._import_plan(Path(path))
 
     def _refresh_plan_buttons(self):
         ready = bool(self.result)
@@ -654,6 +779,11 @@ class AutomaticWorkspace:
         self.agent_button.configure(state="normal" if ready else "disabled")
         for button in (self.chunks_button, self.accept_button):
             button.configure(state="normal" if ready and self.plan else "disabled")
+        self.silence_button.configure(state="normal" if ready else "disabled")
+        has_trims = ready and self.trims is not None
+        self.review_button.configure(state="normal" if has_trims else "disabled")
+        enabled = editorial_trims.stats(self.trims)["enabled"] if has_trims else 0
+        self.trim_export_button.configure(state="normal" if enabled else "disabled")
 
     def _background(self, work):
         if self.worker and self.worker.is_alive():
@@ -727,12 +857,221 @@ class AutomaticWorkspace:
             with editorial_pipeline._RunLock(master.parent / ".work"):
                 destination = podcast_export.export_plan(master, plan, source, output,
                     cancel=self.cancel, progress_cb=lambda fraction: self.events.put(
-                        {"tipo": "overall", "fraction": fraction}))
+                        {"tipo": "overall", "fraction": fraction}),
+                    log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
             self.events.put({"tipo": "export_done", "path": str(destination)})
         self._background(work)
 
+    # ================================================================ recortes ----
+    def _trims_file(self) -> Path | None:
+        master = self._master_path()
+        return master.parent / "views" / "trims.json" if master else None
+
+    def _load_trims_async(self):
+        """Carga silenciosa (sin bloquear la UI): el master es grande; el documento de
+        recortes se valida contra la identidad del medio y se arma el índice de bordes."""
+        master = self._master_path()
+        if not master:
+            return
+        path = master.parent / "views" / "trims.json"
+
+        def work():
+            try:
+                data = read_json(master)
+                duration = float(data["media"]["duration"])
+                fingerprint = data["media"].get("fingerprint") or {}
+                document = editorial_trims.load_document(path, fingerprint=fingerprint,
+                                                         duration=duration)
+                if document is None:
+                    document = editorial_trims.new_document(fingerprint, duration)
+                index = editorial_trims.BoundaryIndex(data)
+                self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(path),
+                                 "doc": document, "index": index, "quiet": True})
+            except Exception as error:
+                self.events.put({"tipo": "log", "message": f"Recortes: {error}"})
+        threading.Thread(target=work, daemon=True, name="trims-load").start()
+
+    def _on_trims_loaded(self, event: dict):
+        master = self._master_path()
+        if not master or event.get("master") != str(master):
+            return                             # llegó tarde: ya se abrió otro proyecto
+        self.trims = event["doc"]
+        self.trims_path = Path(event["path"])
+        if event.get("index") is not None:
+            self._boundary_index = event["index"]
+        self.sel_cut = None
+        self._drag_cut = None
+        if "review_stale" in event:
+            self._review_stale = bool(event["review_stale"])
+        self._reindex_trims()
+        self._refresh_trims_status()
+        self.editor.refrescar_layout()
+        if not event.get("quiet"):
+            self._background_done()
+        else:
+            self._refresh_plan_buttons()
+        if event.get("message"):
+            self._append_log(event["message"])
+
+    def _reindex_trims(self):
+        cuts = self.trims["cuts"] if self.trims else []
+        self._trim_starts = [cut["t_ini"] for cut in cuts]
+        prefix = []
+        maximum = float("-inf")
+        for cut in cuts:
+            maximum = max(maximum, cut["t_fin"])
+            prefix.append(maximum)
+        self._trim_pme = prefix
+        self._skip_intervals = editorial_trims.enabled_intervals(self.trims)
+        self._last_skip = None
+
+    def _refresh_trims_status(self):
+        if self.trims is None:
+            self.trims_status.configure(text="Sin recortes. Analiza silencios o arrastra en el "
+                                             "carril «recortes» del timeline.")
+            return
+        summary = editorial_trims.stats(self.trims)
+        origins = summary["by_origin"]
+        text = (f"{summary['total']} recortes · {summary['enabled']} activos · "
+                f"{format_time(summary['removed_seconds'])[3:]} a quitar "
+                f"(silencio {origins['silence']} · AI {origins['ai']} · tuyos {origins['user']})")
+        if self._review_stale:
+            text += " · revisión AI desactualizada"
+        self.trims_status.configure(text=text)
+
+    def _commit_trims(self, *, message: str | None = None):
+        """Persiste tras cada mutación del usuario (JSON chico, escritura atómica)."""
+        if self.trims is None or self.trims_path is None:
+            return
+        editorial_trims.sort_cuts(self.trims)
+        try:
+            editorial_trims.save_document(self.trims_path, self.trims)
+        except Exception as error:
+            self.editor.status(f"✗ no pude guardar los recortes: {error}")
+        self._review_stale = True
+        self._reindex_trims()
+        self._refresh_trims_status()
+        self._refresh_plan_buttons()
+        self.editor._dibujar_timeline()
+        if message:
+            self.editor.status(message)
+
+    def _silence_params(self) -> dict:
+        min_gap = float(self.min_gap_entry.get().strip().replace(",", "."))
+        margin = float(self.margin_entry.get().strip().replace(",", "."))
+        if min_gap <= 0 or margin < 0:
+            raise ValueError("el hueco mínimo debe ser positivo y el margen no negativo")
+        return {"min_gap": min_gap, "keep_before": margin, "keep_after": margin}
+
+    def _analyze_silences(self):
+        master = self._master_path()
+        if not master or not self.info:
+            return
+        try:
+            params = self._silence_params()
+        except ValueError as error:
+            messagebox.showwarning("Parámetros", f"Revisa mín/margen: {error}")
+            return
+        path = master.parent / "views" / "trims.json"
+        plan = self.plan
+        self.progress.set(0)
+        self.pipeline_title.configure(text="Analizando silencios…")
+        self._append_log(f"Analizando huecos sin voz (mín {params['min_gap']:.1f}s, "
+                         f"margen {params['keep_before']:.1f}s)…")
+
+        def work():
+            data = read_json(master)
+            duration = float(data["media"]["duration"])
+            fingerprint = data["media"].get("fingerprint") or {}
+            document = editorial_trims.load_document(path, fingerprint=fingerprint, duration=duration)
+            if document is None:
+                document = editorial_trims.new_document(fingerprint, duration)
+            audio = {track_id: master.parent / "tracks" / track_id / "audio.flac"
+                     for track_id in data["tracks"]}
+            analysis = editorial_trims.analyze_silences(
+                data, audio_paths=audio, params=params, cancel=self.cancel,
+                progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
+                log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
+            editorial_trims.apply_silence_analysis(document, analysis)
+            editorial_trims.save_document(path, document)
+            editorial_trims.write_review_package(master.parent, data, plan, document)
+            index = editorial_trims.BoundaryIndex(data)
+            summary = analysis["stats"]
+            self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(path),
+                             "doc": document, "index": index, "quiet": False, "review_stale": False,
+                             "message": (f"Silencios: {summary['cuts']} recortes propuestos, "
+                                         f"{summary['enabled']} activos. Nada se cortó: revisa el "
+                                         "carril «recortes» y ajusta con el mouse.")})
+        self._background(work)
+
+    def _import_trims(self, path):
+        master = self._master_path()
+        if not master:
+            return
+        trims_path = master.parent / "views" / "trims.json"
+        plan = self.plan
+
+        def work():
+            data = read_json(master)
+            document, proposal = editorial_trims.import_proposal(
+                trims_path, path, data, plan, fingerprint=data["media"].get("fingerprint"))
+            index = editorial_trims.BoundaryIndex(data)
+            flagged = sum(1 for cut in proposal["cuts"] if cut["warnings"])
+            self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(trims_path),
+                             "doc": document, "index": index, "quiet": False,
+                             "message": (f"Propuesta de la AI ({proposal['planner']}): "
+                                         f"{len(proposal['cuts'])} recortes de contenido"
+                                         + (f", {flagged} con avisos" if flagged else "")
+                                         + ". Aparecen en violeta; revísalos antes de cortar.")})
+        self._background(work)
+
+    def _prepare_review(self):
+        master = self._master_path()
+        if not master or self.trims is None:
+            return
+        plan, document = self.plan, self.trims
+
+        def work():
+            data = read_json(master)
+            paths = editorial_trims.write_review_package(master.parent, data, plan, document)
+            self.events.put({"tipo": "review_written", "request": paths["request"]})
+        self._background(work)
+
+    def _export_trims(self):
+        if not self.info or self.trims is None:
+            return
+        if not editorial_trims.stats(self.trims)["enabled"]:
+            messagebox.showinfo("Sin recortes activos", "Activa o crea al menos un recorte.")
+            return
+        master, plan, trims, source = self._master_path(), self.plan, self.trims, self.info["path"]
+        output = dialogs.open_dir("Carpeta para los videos recortados", remember="podcast_exports")
+        if not output:
+            return
+        self.progress.set(0)
+        self.pipeline_title.configure(text="Cortando y exportando…")
+        summary = editorial_trims.stats(trims)
+        self._append_log(f"Cortando {summary['enabled']} recortes "
+                         f"({format_time(summary['removed_seconds'])}) "
+                         + (f"en {len(plan['chunks'])} bloques…" if plan else "sobre el video completo…"))
+
+        def work():
+            with editorial_pipeline._RunLock(master.parent / ".work"):
+                destination = podcast_export.export_plan(
+                    master, plan, source, output, trims=trims, cancel=self.cancel,
+                    progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
+                    log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
+            self.events.put({"tipo": "export_done", "path": str(destination)})
+        self._background(work)
+
+    # ---- carriles: bloques (read-only) + recortes (interactivo) ----
     def _cut_lanes(self):
-        return [{"alto": 36, "dibujar": self._draw_cuts}] if self.plan else []
+        lanes = []
+        if self.plan:
+            lanes.append({"alto": 36, "dibujar": self._draw_cuts})
+        if self.trims is not None:
+            lanes.append({"nombre": "recortes", "alto": TRIMS_H, "dibujar": self._draw_trims,
+                          "gesto": self._trim_gesture})
+        return lanes
 
     def _draw_cuts(self, canvas, geometry, y):
         x0, width = geometry
@@ -751,6 +1090,343 @@ class AutomaticWorkspace:
                                    anchor="w", fill="white", font=("TkDefaultFont", 10))
             if index and chunk["t_ini"] >= view_start:
                 canvas.create_line(left, 0, left, y + 34, fill="#ffd27a", dash=(4, 3), width=2)
+
+    def _visible_cuts(self, start: float, end: float) -> list[dict]:
+        cuts = self.trims["cuts"] if self.trims else []
+        low = bisect_right(self._trim_pme, start)
+        high = bisect_left(self._trim_starts, end)
+        visible = [cut for cut in cuts[low:high] if cut["t_fin"] > start]
+        dragging = (self._drag_cut or {}).get("cut")
+        if dragging is not None and dragging not in visible and dragging["t_fin"] > start \
+                and dragging["t_ini"] < end:
+            visible.append(dragging)           # el índice no sigue al drag en vivo
+        return visible
+
+    def _draw_trims(self, canvas, geometry, y):
+        x0, width = geometry
+        view_start, span = self.editor.view
+        view_end = view_start + span
+        y1 = y + TRIMS_H
+        bottom = self.editor._alto_total()
+        canvas.create_rectangle(x0, y, x0 + width, y1, fill="#141917", outline="#26302a")
+        canvas.create_text(x0 + 3, y + TRIMS_H / 2, text="recortes", anchor="w", fill="#4f5f56",
+                           font=("TkDefaultFont", 7))
+        if self.trims is None:
+            return
+        cuts = self._visible_cuts(view_start, view_end)
+        drag = self._drag_cut
+        if drag and drag["mode"] == "create":
+            a, b = sorted((drag["t0"], drag["t1"]))
+            xa, xb = self.editor._t2x(max(a, view_start), geometry), self.editor._t2x(min(b, view_end), geometry)
+            canvas.create_rectangle(xa, y + 3, max(xb, xa + 1), y1 - 3, fill="",
+                                    outline=COL_TRIM["user"], dash=(3, 2))
+        if len(cuts) > TRIM_LOD_MAX:
+            # LOD denso: cobertura por píxel (activos y desactivados por separado), cero
+            # items por recorte; el hit-test sigue contra el documento, no contra items.
+            for enabled in (True, False):
+                covered = bytearray(int(width) + 1)
+                for cut in cuts:
+                    if cut["enabled"] != enabled:
+                        continue
+                    pa = int((max(cut["t_ini"], view_start) - view_start) / span * width)
+                    pb = int((min(cut["t_fin"], view_end) - view_start) / span * width)
+                    for px in range(max(0, pa), min(int(width), pb + 1)):
+                        covered[px] = 1
+                px = 0
+                while px <= int(width):
+                    if covered[px]:
+                        first = px
+                        while px <= int(width) and covered[px]:
+                            px += 1
+                        canvas.create_rectangle(x0 + first, y + 4, x0 + px, y1 - 4,
+                                                fill=COL_TRIM_LOD[enabled], outline="")
+                        if enabled:
+                            canvas.create_rectangle(x0 + first, y1, x0 + px, bottom,
+                                                    fill=COL_TRIM_LOD[True], stipple="gray12",
+                                                    outline="")
+                    px += 1
+            return
+        for cut in cuts:
+            xa = self.editor._t2x(max(cut["t_ini"], view_start), geometry)
+            xb = max(self.editor._t2x(min(cut["t_fin"], view_end), geometry), xa + 2)
+            color = COL_TRIM[cut["origin"]]
+            selected = cut is self.sel_cut
+            outline = "#ffffff" if selected else color
+            if cut["enabled"]:
+                canvas.create_rectangle(xa, y + 3, xb, y1 - 3, fill=color, outline=outline,
+                                        width=2 if selected else 1)
+                # proyección sobre las pistas: lo que se va (un item con stipple)
+                canvas.create_rectangle(xa, y1, xb, bottom, fill=color, stipple="gray12", outline="")
+            else:
+                canvas.create_rectangle(xa, y + 3, xb, y1 - 3, fill="#1c211e", outline=outline,
+                                        width=2 if selected else 1, dash=() if selected else (3, 2))
+            if self._boundary_index is not None:
+                for xe, timestamp in ((xa, cut["t_ini"]), (xb, cut["t_fin"])):
+                    hit = self._boundary_index.conflicts(timestamp)
+                    if hit["words"] or hit["laughter"]:
+                        canvas.create_line(xe, y + 1, xe, y1 - 1, fill="#ff5252", width=2)
+            if xb - xa > 34:
+                canvas.create_text((xa + xb) / 2, (y + y1) / 2,
+                                   text=f"{cut['t_fin'] - cut['t_ini']:.1f}s",
+                                   fill=TEXT if cut["enabled"] else MUTED, font=("TkDefaultFont", 8))
+            if selected:
+                for xh in (xa, xb):
+                    canvas.create_rectangle(xh - 2, y + 2, xh + 2, y1 - 2, fill="#ffffff", outline="")
+
+    def _trim_hit(self, x, geometry):
+        """(recorte, modo) bajo el cursor: bordes del seleccionado (±4 px) primero, después
+        el seleccionado, después el más angosto — mismo criterio que las marcas."""
+        view_start, span = self.editor.view
+        visible = self._visible_cuts(view_start, view_start + span)
+        boxes = []
+        for cut in visible:
+            xa = self.editor._t2x(max(cut["t_ini"], view_start), geometry)
+            xb = max(self.editor._t2x(min(cut["t_fin"], view_start + span), geometry), xa + 2)
+            boxes.append((cut, xa, xb))
+        for cut, xa, xb in boxes:
+            if cut is self.sel_cut:
+                if abs(x - xa) <= 4:
+                    return cut, "edge_start"
+                if abs(x - xb) <= 4:
+                    return cut, "edge_end"
+        hits = [(cut is not self.sel_cut, xb - xa, cut) for cut, xa, xb in boxes if xa - 2 <= x <= xb + 2]
+        if not hits:
+            return None
+        hits.sort(key=lambda item: (item[0], item[1]))
+        return hits[0][2], "move"
+
+    def _select_cut(self, cut):
+        self.sel_cut = cut
+        if cut is None:
+            return
+        self.editor._seleccionar(None)         # una sola selección visible a la vez
+        self._describe_cut(cut)
+
+    def _describe_cut(self, cut):
+        text = (f"✂ {cut['cut_id']} · {TRIM_ORIGIN_LABEL[cut['origin']]} · "
+                f"{format_time(cut['t_ini'])[3:-1]}–{format_time(cut['t_fin'])[3:-1]} "
+                f"({cut['t_fin'] - cut['t_ini']:.1f} s) · {'ACTIVO' if cut['enabled'] else 'desactivado'}"
+                " · X activa/desactiva · Supr borra · arrastra bordes o el cuerpo")
+        if cut.get("reason"):
+            text += f"\n{cut['reason'][:160]}"
+        if self._boundary_index is not None:
+            warnings = self._boundary_index.cut_warnings(cut)
+            if warnings:
+                text += "\n⚠ " + "; ".join(warnings)
+        self.editor.status(text)
+
+    def _trim_gesture(self, phase, e, geometry, y0):
+        if self.trims is None or geometry is None:
+            return False
+        if phase == "press":
+            t = self.editor._x2t(e.x, geometry)
+            hit = self._trim_hit(e.x, geometry)
+            if hit:
+                cut, mode = hit
+                self._select_cut(cut)
+                self._drag_cut = {"mode": mode, "cut": cut, "base": (dict(cut), t), "moved": False}
+            else:
+                self._select_cut(None)
+                self._drag_cut = {"mode": "create", "t0": t, "t1": t, "moved": False}
+            self.editor._dibujar_timeline()
+            return True
+        if phase == "motion":
+            drag = self._drag_cut
+            if not drag:
+                return True
+            duration = self.info["duracion"] if self.info else float(self.trims["duration"])
+            t = min(max(self.editor._x2t(e.x, geometry), 0.0), duration)
+            drag["moved"] = True
+            if drag["mode"] == "create":
+                drag["t1"] = t
+            else:
+                cut = drag["cut"]
+                original, t_start = drag["base"]
+                minimum = editorial_trims.MIN_CUT_SECONDS
+                if drag["mode"] == "move":
+                    width = original["t_fin"] - original["t_ini"]
+                    start = min(max(0.0, original["t_ini"] + (t - t_start)), duration - width)
+                    cut["t_ini"], cut["t_fin"] = round(start, 3), round(start + width, 3)
+                elif drag["mode"] == "edge_start":
+                    cut["t_ini"] = round(min(t, cut["t_fin"] - minimum), 3)
+                else:
+                    cut["t_fin"] = round(max(t, cut["t_ini"] + minimum), 3)
+            self.editor._dibujar_timeline()
+            return True
+        if phase == "release":
+            drag, self._drag_cut = self._drag_cut, None
+            if not drag:
+                return True
+            if drag["mode"] == "create":
+                pixels = abs(drag["t1"] - drag["t0"]) * (geometry[1] / max(self.editor.view[1], 1e-9))
+                if drag["moved"] and pixels >= 4:
+                    try:
+                        cut = editorial_trims.add_cut(self.trims, drag["t0"], drag["t1"],
+                                                      origin="user", reason="Recorte manual.")
+                    except ValueError as error:
+                        self.editor.status(f"⚠ {error}")
+                        self.editor._dibujar_timeline()
+                        return True
+                    self._select_cut(cut)
+                    self._commit_trims()
+                    self._describe_cut(cut)
+                else:
+                    self.editor._dibujar_timeline()
+                return True
+            cut = drag["cut"]
+            if drag["moved"]:
+                original = drag["base"][0]
+                if cut["t_fin"] - cut["t_ini"] < editorial_trims.MIN_CUT_SECONDS:
+                    cut.clear()
+                    cut.update(original)
+                    self.editor.status("⚠ recorte demasiado corto — volvió a su estado anterior.")
+                else:
+                    cut["edited"] = True
+                self._commit_trims()
+                self._describe_cut(cut)
+            return True
+        if phase == "doble":
+            hit = self._trim_hit(e.x, geometry)
+            if hit:
+                self._toggle_cut(hit[0])
+            return True
+        return False
+
+    def _toggle_cut(self, cut):
+        cut["enabled"] = not cut["enabled"]
+        cut["edited"] = True
+        self._select_cut(cut)
+        self._commit_trims()
+        self._describe_cut(cut)
+
+    def _delete_cut(self, cut):
+        editorial_trims.remove_cut(self.trims, cut)
+        if self.sel_cut is cut:
+            self.sel_cut = None
+        self._commit_trims(message=f"🗑 {cut['cut_id']} borrado.")
+
+    def _trim_keys(self, e) -> bool:
+        if self.sel_cut is None or self.trims is None or self.editor.sel_marca is not None:
+            return False
+        if e.keysym in ("Delete", "BackSpace"):
+            self._delete_cut(self.sel_cut)
+            return True
+        if e.keysym == "x":
+            self._toggle_cut(self.sel_cut)
+            return True
+        if e.keysym == "Escape":
+            self.sel_cut = None
+            self.editor._dibujar_timeline()
+            return True
+        return False
+
+    def _after_editor_press(self, e):
+        """Click en el carril de MARCAS (lo atiende el editor): el recorte deja de estar
+        seleccionado para que Supr/X no actúen sobre dos cosas."""
+        from editor_medios import MARKS_H, RULER_H
+        if self.sel_cut is not None and RULER_H <= e.y <= RULER_H + MARKS_H:
+            self.sel_cut = None
+            self.editor._dibujar_timeline()
+
+    def _trims_lane_at(self, y) -> tuple[dict, int] | None:
+        hit = self.editor._carril_en(y)
+        # por NOMBRE: un método ligado es un objeto nuevo en cada acceso (`is` fallaría)
+        if hit and hit[0].get("nombre") == "recortes":
+            return hit
+        return None
+
+    def _trim_hover(self, e):
+        tl = self.editor.tl
+        for item in self._tt_items:
+            try:
+                tl.delete(item)
+            except Exception:
+                pass
+        self._tt_items = []
+        geometry = self.editor._tl_geo()
+        if not geometry or self.trims is None or self._drag_cut is not None:
+            return
+        if self._trims_lane_at(e.y) is None:
+            return
+        hit = self._trim_hit(e.x, geometry)
+        if not hit:
+            return
+        cut = hit[0]
+        text = (f"{cut['cut_id']} · {TRIM_ORIGIN_LABEL[cut['origin']]}"
+                f"{'' if cut['enabled'] else ' · DESACTIVADO'} · "
+                f"{format_time(cut['t_ini'])[3:-1]}–{format_time(cut['t_fin'])[3:-1]} "
+                f"({cut['t_fin'] - cut['t_ini']:.1f} s)")
+        if cut.get("reason"):
+            text += " · " + cut["reason"][:110]
+        x = min(e.x + 10, max(tl.winfo_width() - 330, 10))
+        text_id = tl.create_text(x, e.y - 14, text=text[:170], anchor="w", fill="#eee",
+                                 font=("TkDefaultFont", 9), width=330)
+        box = tl.bbox(text_id)
+        if box:
+            rect_id = tl.create_rectangle(box[0] - 4, box[1] - 2, box[2] + 4, box[3] + 2,
+                                          fill="#262626", outline="#444")
+            tl.tag_lower(rect_id, text_id)
+            self._tt_items = [rect_id, text_id]
+        else:
+            self._tt_items = [text_id]
+
+    def _trim_menu(self, e):
+        geometry = self.editor._tl_geo()
+        if not geometry or self.trims is None or self._trims_lane_at(e.y) is None:
+            return
+        import tkinter as tk
+        menu = tk.Menu(self.editor.tl, tearoff=0, bg="#222", fg="#ddd", activebackground="#2e6b45")
+        hit = self._trim_hit(e.x, geometry)
+        if hit:
+            cut = hit[0]
+            self._select_cut(cut)
+            self.editor._dibujar_timeline()
+            menu.add_command(label=("Desactivar" if cut["enabled"] else "Activar") + f" {cut['cut_id']}",
+                             command=lambda c=cut: self._toggle_cut(c))
+            menu.add_command(label="Borrar", command=lambda c=cut: self._delete_cut(c))
+            menu.add_separator()
+            menu.add_command(label="Ir al inicio",
+                             command=lambda c=cut: self.editor._set_playhead(c["t_ini"]))
+            menu.add_command(label="Ir al final",
+                             command=lambda c=cut: self.editor._set_playhead(c["t_fin"]))
+            menu.add_command(label="Escuchar desde 2 s antes",
+                             command=lambda c=cut: self.editor._play(reiniciar=True,
+                                                                     desde=max(0.0, c["t_ini"] - 2.0)))
+        else:
+            t = self.editor._x2t(e.x, geometry)
+
+            def create(seconds=1.0):
+                try:
+                    cut = editorial_trims.add_cut(self.trims, t, t + seconds, origin="user",
+                                                  reason="Recorte manual.")
+                except ValueError as error:
+                    self.editor.status(f"⚠ {error}")
+                    return
+                self._select_cut(cut)
+                self._commit_trims()
+            menu.add_command(label=f"Crear recorte de 1 s en {format_time(t)[3:-1]}", command=create)
+        menu.tk_popup(e.x_root, e.y_root)
+
+    def _on_playhead(self, t: float):
+        """Reproducción con «saltar recortes»: al entrar en un recorte activo se re-arranca la
+        sesión al final del recorte (una vez por recorte; el re-arranque tarda unos cientos
+        de ms — es una ayuda de revisión, no el render)."""
+        if not self._skip_intervals or not self.skip_check.get():
+            return
+        if not self.editor._playback_activo() or self.editor._warmup is not None:
+            return
+        starts = [start for start, _ in self._skip_intervals]
+        index = bisect_right(starts, t) - 1
+        if index < 0:
+            return
+        start, end = self._skip_intervals[index]
+        if not (start <= t < end):
+            return
+        now = time.monotonic()
+        if self._last_skip and self._last_skip[0] == index and now - self._last_skip[1] < 1.5:
+            return
+        self._last_skip = (index, now)
+        self.editor._play(reiniciar=True, desde=min(end + 0.02, float(self.info["duracion"])))
 
     def activar(self):
         self.editor.activar()

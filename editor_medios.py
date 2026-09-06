@@ -18,10 +18,15 @@ Contrato con el dueño (wizard / tab Marcar):
     `cerrar()` al cerrar la app.
   · hooks:  `controles_pista_extra(fila, pista, i)` — widgets extra por pista
     (nombre/rol del wizard);  `overlay_preview(canvas, geo)` — dibujo encima del
-    frame (rects del wizard);  `carriles_extra()` → [{"alto", "dibujar"}] —
-    carriles read-only entre el carril de marcas y las pistas (metadata de la
-    tab Marcar);  `on_video_cargado(info, fp)` — tras la inspección, ANTES de
-    armar pistas;  `on_playhead(t)` — cambio del playhead. Los cambios de MARCAS se
+    frame (rects del wizard);  `carriles_extra()` → [{"alto", "dibujar", "gesto"?}] —
+    carriles entre el carril de marcas y las pistas (metadata de la tab Marcar,
+    bloques y recortes de Automático). Un carril con `gesto(fase, e, g, y0)`
+    (fase: press/motion/release/doble) recibe el botón izquierdo cuando cae sobre
+    él; si `press` devuelve True el gesto queda CAPTURADO por ese carril hasta
+    soltar y el playhead no se mueve;  `teclas_extra(e)` → True si el dueño
+    consumió la tecla (se consulta ANTES que las marcas);  `on_video_cargado(info,
+    fp)` — tras la inspección, ANTES de armar pistas;  `on_playhead(t)` — cambio
+    del playhead. Los cambios de MARCAS se
     observan suscribiéndose al Registro compartido (Registro.suscribir) — no hay
     hook propio (review impl r1.7: un solo canal, sin duplicados).
 """
@@ -62,12 +67,14 @@ class EditorMedios:
 
     def __init__(self, parent, *, ancho_ctl=330, controles_pista_extra=None,
                  overlay_preview=None, carriles_extra=None, on_video_cargado=None,
-                 on_playhead=None):
+                 on_playhead=None, teclas_extra=None):
         self.controles_pista_extra = controles_pista_extra
         self.overlay_preview = overlay_preview
         self.carriles_extra = carriles_extra
         self.on_video_cargado = on_video_cargado
         self.on_playhead = on_playhead
+        self.teclas_extra = teclas_extra
+        self._drag_extra = None                # (gesto, y0) del carril extra que capturó B1
 
         self.q: queue.Queue = queue.Queue()
         self._gen = 0                          # token de generación (cambio de video)
@@ -182,7 +189,7 @@ class EditorMedios:
             # escribirse en cualquier Entry sin disparar marcas — consenso q.4)
             for ks in ("Left", "Right", "Home", "End", "m", "i", "o", "x",
                        "Delete", "BackSpace", "plus", "equal", "minus",
-                       "KP_Add", "KP_Subtract", "z", "Z"):
+                       "KP_Add", "KP_Subtract", "z", "Z", "Escape"):
                 c.bind(f"<Key-{ks}>", self._tl_key)
             c.bind("<Key-space>", lambda e: (self._play(), "break")[1])
 
@@ -664,7 +671,26 @@ class EditorMedios:
                 self._drag_marca = {"modo": "crear", "t0": t, "t1": t, "movio": False}
             self._dibujar_timeline()
             return
+        hit = self._carril_en(e.y)
+        if hit is not None and hit[0].get("gesto"):
+            try:
+                consumido = bool(hit[0]["gesto"]("press", e, g, hit[1]))
+            except Exception:
+                consumido = False
+            if consumido:                      # el carril del dueño capturó el gesto
+                self._drag_extra = (hit[0]["gesto"], hit[1])
+                return
         self._scrub(e, g)
+
+    def _carril_en(self, y):
+        """(carril, y0) del carril EXTRA del dueño bajo la coordenada `y`, o None."""
+        y0 = RULER_H + MARKS_H
+        for c in self._carriles():
+            alto = int(c.get("alto", 0))
+            if y0 <= y < y0 + alto:
+                return c, y0
+            y0 += alto
+        return None
 
     def _scrub(self, e, g):
         t = self._x2t(e.x, g)
@@ -675,6 +701,13 @@ class EditorMedios:
     def _tl_motion(self, e):
         g = self._tl_geo()
         if not g:
+            return
+        if self._drag_extra is not None:
+            gesto, y0 = self._drag_extra
+            try:
+                gesto("motion", e, g, y0)
+            except Exception:
+                pass
             return
         d = self._drag_marca
         if d is None:
@@ -701,6 +734,14 @@ class EditorMedios:
         self._dibujar_timeline()
 
     def _tl_release(self, _e):
+        extra, self._drag_extra = self._drag_extra, None
+        if extra is not None:
+            gesto, y0 = extra
+            try:
+                gesto("release", _e, self._tl_geo(), y0)
+            except Exception:
+                pass
+            return
         d, self._drag_marca = self._drag_marca, None
         if d is None or self.reg is None:
             return
@@ -737,6 +778,13 @@ class EditorMedios:
             hit = self._marca_hit(e.x, e.y, g)
             if hit:
                 self._seleccionar(hit[0], foco_prompt=True)
+            return
+        carril = self._carril_en(e.y) if g else None
+        if carril is not None and carril[0].get("gesto"):
+            try:
+                carril[0]["gesto"]("doble", e, g, carril[1])
+            except Exception:
+                pass
 
     def _tl_pan_ini(self, e):
         self._pan_ancla = (e.x, self.view[0])
@@ -772,6 +820,12 @@ class EditorMedios:
     def _tl_key(self, e):
         if not self.info:
             return "break"
+        if self.teclas_extra:                  # el dueño primero (recortes seleccionados)
+            try:
+                if self.teclas_extra(e):
+                    return "break"
+            except Exception:
+                pass
         ks = e.keysym
         shift = bool(e.state & 0x1)
         if ks in ("Left", "Right", "Home", "End"):

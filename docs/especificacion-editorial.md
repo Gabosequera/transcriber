@@ -1,6 +1,10 @@
 # Transcriptor editorial: especificación vigente
 
-Última revisión: 29 de agosto de 2026.
+> Antes `CAMBIO-INTERFAZ-Y-DISTRIBUCION.md`. Cómo se usa desde la app:
+> [guia-automatico.md](guia-automatico.md). Cómo está implementado:
+> [referencia-tecnica.md](referencia-tecnica.md).
+
+Última revisión: 6 de septiembre de 2026 (sección 10.1: recortes).
 
 Este documento contiene únicamente las decisiones vigentes. No es un historial de todas
 las ideas discutidas. Si una propuesta futura contradice la Fase 1, manda la Fase 1.
@@ -429,6 +433,32 @@ arousal coincidente recibe mayor prioridad.
 Modificar los límites regenera estas carpetas desde el master. No vuelve a transcribir
 ni a ejecutar risa/prosodia.
 
+### 10.1 Recortes: propuestas revisables, nunca edición inmediata
+
+Después de los bloques (o sin ellos), la app puede proponer RECORTES: tramos que se
+quitarían del video. Reglas vigentes:
+
+1. **La heurística solo propone.** `Analizar silencios` busca huecos sin palabras ni
+   risas en ninguna pista (colchones alrededor de palabras y risas, hueco mínimo y margen
+   conservado configurables) y mide la actividad acústica del hueco por pista. Un hueco
+   con actividad se propone desactivado. Nada se corta.
+2. **El documento de recortes** `views/trims.json` (`editorial-trims/1`) es la única
+   fuente de verdad: identidad por fingerprint del medio; recortes con origen
+   silencio/AI/usuario, activado, editado, motivo, evidencia. Los solapes se permiten y
+   lo que se quita es la unión de los activos.
+3. **El humano manda desde el timeline.** Carril «recortes» con selección, arrastre de
+   cuerpo y bordes, creación a mano, activar/desactivar, borrar, tooltip y menú. Volver a
+   analizar respeta lo editado y lo desactivado.
+4. **Segunda pasada de la AI.** `Preparar revisión AI` genera `trim-agent-request.md` y
+   `trim-review.md` por bloque (conversación con los recortes ya marcados y la
+   clasificación de temas/subtemas). La AI devuelve `trims.proposed.json`
+   (`editorial-trims-proposal/1`); la app valida identidad, referencias y ajusta bordes
+   (≤ 1,5 s) para no partir palabras ni risas. Criterio: aporte a la conversación; nunca
+   recortar por humor fuerte, lisuras o comentarios ofensivos (post).
+5. **Solo «Cortar y exportar» edita.** Cada bloque sale con los segmentos conservados
+   concatenados (`trim`/`atrim` + `concat`), todas las pistas y sus offsets, precisión de
+   fotograma, sin deriva A/V; el original no se toca.
+
 ## 11. Archivos esperados de la Fase 1
 
 ```text
@@ -602,8 +632,8 @@ pista por tiempo si las mediciones demuestran una ganancia clara.
 - sentimiento o emoción derivados del texto;
 - limpieza de audio automática;
 - diarización obligatoria;
-- edición destructiva del video;
-- decisión automática del corte final;
+- edición destructiva del video (los recortes se exportan a archivos nuevos);
+- decisión automática del corte final (la heurística y la AI proponen; el humano corta);
 - exportación específica a Premiere, Resolve u otro NLE;
 - varios clips movibles en el timeline;
 - load balancing antes de validar el pipeline local y los chunks.
