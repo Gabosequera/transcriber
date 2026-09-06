@@ -42,12 +42,21 @@ video decodifica a `VS_FPS/rate` frames por segundo de medio. Nada más cambia.
 
 Audio (`medios.Reproductor.play(video, pistas, t, rate=1.0)`):
 
-- La mezcla termina en `atempo={rate}` (el ffmpeg incluido acepta 0,5–100 en un solo
-  filtro; verificado con `ffmpeg -h filter=atempo`). Con una pista: `-af`; con varias:
-  se encadena tras `amix` en el mismo `filter_complex`.
-- Por encima de `preview_audio_max_rate` (config.json, por defecto 2.0) se añade
-  `volume=0`: FFplay sigue consumiendo audio estirado y **sigue dando reloj**, pero no
-  se oye el gorjeo. Un solo diseño de reloj para todas las velocidades.
+- La mezcla termina en un estiramiento temporal **que conserva el tono** (lo mismo que
+  hace DaVinci al acelerar): se oye lo que dicen a ×2, ×3 y ×4, solo más rápido, sin
+  voz de ardilla. El ffmpeg incluido trae dos: `rubberband=tempo={rate}` (librubberband,
+  la mejor calidad para voz; opciones `pitchq=quality`, `transients=smooth`) y
+  `atempo={rate}` (WSOLA, más ligero, 0,5–100 en un solo filtro). Se usa rubberband y,
+  si el filtro no existe en el ffmpeg de la máquina (`ffmpeg -filters`, sondeado una
+  vez como `filter_script_option`), atempo. Con una pista: `-af`; con varias, encadenado
+  tras `amix` en el mismo `filter_complex`. Coste medido en el PC de referencia sobre
+  60 s del podcast (decodificación AAC incluida): atempo ×3/×4 ≈ 70× tiempo real;
+  rubberband ×3/×4 ≈ 40× (con `pitchq=quality` ≈ 38×). Ninguno compromete el reloj.
+- El audio **nunca se silencia por velocidad**. Solo el skim a ×8 (fotogramas clave)
+  lo lleva a `volume=0`, porque a ×8 ya no es inteligible, y aun así FFplay consume el
+  audio estirado y **sigue dando reloj**: un solo diseño de reloj para todas las
+  velocidades. `preview_audio_max_rate` (config.json, por defecto 4.0) permite bajar ese
+  umbral si en otra máquina el estiramiento no llega a tiempo real.
 - `AudioClock(start, rate)`: `position = start + rate*(valor + transcurrido)`. El umbral
   de reloj perdido (0,5 s) sigue en segundos de pared.
 
@@ -294,8 +303,10 @@ con el código real, para y explica el conflicto antes de escribir código.
 ### Fases (cada una: tests verdes + smoke + commit propio; no mezcles fases)
 
 **Fase 1 — velocidad.** `AudioClock(start, rate)`; `Reproductor.play(..., rate)` con
-`atempo` y `volume=0` sobre `preview_audio_max_rate` (nueva clave en
-`hardware._DEFAULTS`, 2.0); `VideoStream(fps=VS_FPS/rate, skip)` con `-skip_frame bidir`
+estiramiento que conserva el tono (`rubberband`, y `atempo` si no está; sondeo único
+cacheado como `filter_script_option`) y `volume=0` solo por encima de
+`preview_audio_max_rate` (nueva clave en `hardware._DEFAULTS`, 4.0: el usuario debe
+oír lo que dicen a ×2–×4 para juzgar un recorte); `VideoStream(fps=VS_FPS/rate, skip)` con `-skip_frame bidir`
 desde ×2 y `nokey` desde ×6; `SesionVideo(rate)`; en `EditorMedios`: `rate`, `SPEEDS`,
 `set_rate` con debounce de 150 ms, `_play`/`_restart_audio` propagan `rate`, `lbl_t` y
 status muestran `×N`. Teclas provisionales L/J/K/1-4 en `_tl_key` (la Fase 2 las mueve
@@ -354,5 +365,8 @@ déjalo `off` y documenta los números.
 - Un invariante de arriba estorba a una fase.
 - Tk en Windows reporta mal un modificador (Alt) para un atajo por defecto: propón el
   acorde alternativo (Ctrl/Shift) en vez de improvisar.
-- `atempo` por encima de ×4 resulta inaudible o inestable: sube el tope de `volume=0`
-  y documenta; no cambies el reloj.
+- El estiramiento de audio no llega a tiempo real en la máquina de referencia (FFplay
+  se queda sin datos y el reloj se pierde): pasa de rubberband a atempo para esa
+  velocidad y documenta; no silencies por debajo de ×4 ni cambies el reloj.
+- Tests de la Fase 1 deben cubrir: comando con rubberband, comando con atempo cuando
+  el sondeo dice que no hay rubberband, y `volume=0` solo a ×8.
