@@ -285,6 +285,54 @@ El índice `.transcriptor/catalog.json` es una caché reconstruible con rutas re
 mover o copiar el conjunto conserva el descubrimiento. Copiar solo el video a otro
 equipo requiere copiar también su proyecto: el video no contiene el transcript.
 
+## 7. Montaje: clips reordenables y pistas de video
+
+El conmutador **Fuente | Montaje** de la barra del transporte (`Ctrl` + `M`) cambia lo que
+muestra el timeline. En **Fuente** ves el medio con sus capas y recortes, como siempre.
+En **Montaje** ves la **secuencia**: una regla que mide el montaje desde 0, las pistas de
+video apiladas (**V1** abajo, **V2** encima, y siempre una vacía arriba del todo), una
+franja fina con los temas de cada clip y, debajo, las waveforms de las pistas de audio
+compuestas en tiempo de secuencia. Cada **clip** es un tramo del medio abierto (lo normal
+es trabajar sobre el video recortado) colocado en un tiempo de la secuencia; el audio
+sigue al video (un clip lleva todas las pistas de su tramo). **La pista de arriba tapa a
+la de abajo** durante su intervalo, en video y en audio. Nada se renderiza hasta pulsar
+**Exportar montaje**.
+
+Cómo se llenan las pistas:
+
+| Acción | Cómo |
+|---|---|
+| Añadir la selección de la fuente | En modo Fuente, selecciona un item de cualquier carril (un tema con varios tramos entra como varios clips, en orden) o define un rango a repetir en la regla, y pulsa `Ctrl` + `Shift` + `A`: se añade al final de V1 |
+| Añadir un tema | Con un tema o subtema seleccionado, `Ctrl` + `Shift` + `T` |
+| Pedirle el montaje a la AI | **Preparar para la AI ▾ → Montaje por temas** (§8) |
+
+En modo Montaje valen las mismas herramientas y teclas que en los carriles:
+
+| Acción | Cómo |
+|---|---|
+| Seleccionar | Click (`Shift` + click añade al conjunto); `Ctrl` + `A` todos |
+| Mover | Arrastrar el cuerpo: el clip sale de su sitio (los de después cierran el hueco) y entra donde lo sueltes, con imán a los bordes de otros clips y al playhead. Un conjunto se mueve entero |
+| Subir a otra pista | Arrastrar **hacia arriba** hasta la pista vacía: se crea una nueva encima. `Ctrl` + `Shift` + `↑` / `↓` cambian de pista sin mover el tiempo |
+| Estirar o encoger | Arrastrar un borde (8 px): el inicio mueve juntos el tiempo de fuente y el de secuencia; el fin solo alarga o acorta; ninguno pisa al vecino |
+| Cortar | Herramienta Corte (`B`) y click sobre el clip, o `S` en el playhead |
+| Recortar al playhead | `[` / `]` |
+| Empujar | `Alt` + `←` / `→` (±1 fotograma; `Shift` ±10) |
+| Estados | `E` acepta, `X` desactiva (no se reproduce ni exporta, pero se conserva), `P` vuelve a propuesto |
+| Borrar | `Supr`: los clips siguientes de la pista cierran el hueco |
+| Recorrer | `Tab` / `Shift` + `Tab` (siguiente/anterior por tiempo de secuencia); `↑` / `↓` van a los bordes de clip |
+| Ver el clip en la fuente | Doble click o `Ctrl` + `Shift` + `R`: vuelve a modo Fuente con el playhead en el inicio del tramo |
+| Editar etiqueta y motivo | `Enter` o doble click en el menú contextual |
+| Deshacer / rehacer | `Ctrl` + `Z` / `Ctrl` + `R`, como todo lo demás |
+
+La reproducción en modo Montaje recorre la secuencia clip a clip: al terminar un tramo
+la sesión se re-arma desde el siguiente (≈1 s de latencia por junta en un VOD HEVC, el
+mismo coste que un salto). Los huecos que dejes con «overwrite» o al desactivar un clip
+tapado no existen en el resultado: el montaje no tiene negro, y **Exportar montaje**
+(caja MONTAJE del panel) renderiza un solo video con los clips activos en su orden,
+todas las pistas de audio, y publica su proyecto hijo con `derivation.segments` en ese
+orden (para seguir con la AI sobre el resultado). Todo vive en `views/montaje.json`
+(`editorial-montaje/1`), atado a la huella del medio.
+
 ## Archivos del proyecto
 
 **Preparar para la AI ▾ → Solo temas** prepara la Tarea 3 de la skill. Con un bloque

@@ -179,6 +179,9 @@ class LayersController:
             return copy.deepcopy(w.plan)
         if doc == "lanes":
             return list(self.lane_order)
+        if doc == "montaje":
+            montage = getattr(w, "montage", None)
+            return copy.deepcopy(montage.doc) if montage is not None else None
         if doc.startswith("layer:"):
             layer = self.store.layers.get(doc[6:]) if self.store else None
             return copy.deepcopy(layer)
@@ -214,6 +217,8 @@ class LayersController:
             w._refresh_trims_status()
         elif doc == "lanes":
             self._save_order(list(snapshot or []))
+        elif doc == "montaje":
+            w.montage.restore(snapshot)
         elif doc == "plan":
             if snapshot is None:
                 raise ValueError("el plan no existía; su importación no se deshace")
@@ -280,6 +285,9 @@ class LayersController:
                 self.selected = alive[-1] if alive else None
         self.snapshot()
         self.w._refresh_plan_buttons()
+        montage = getattr(self.w, "montage", None)
+        if montage is not None:
+            montage._after_write()             # el montaje también pudo restaurarse
         self.w.editor.refrescar_layout()
         self.sync_detail()
 

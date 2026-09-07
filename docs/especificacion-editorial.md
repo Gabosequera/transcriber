@@ -481,6 +481,21 @@ quitarían del video. Reglas vigentes:
    recortes no viajan porque ya están aplicados. «Abrir el video recortado» carga ese
    hijo para seguir el ciclo con la AI sobre el video corto.
 
+### 10.2 Montaje: la AI propone una secuencia, la persona la corrige, solo «Exportar montaje» renderiza
+
+Sobre el video recortado (o cualquier medio con capa de temas), el timeline tiene un
+modo **Montaje**: una secuencia de clips (tramos del medio colocados en tiempo de
+secuencia) en pistas de video apiladas `V1`, `V2`…; la de arriba tapa a la de abajo,
+en video y audio; el audio sigue al video; sin pistas de audio independientes, sin
+transiciones, sin negro entre clips. Los clips se mueven (con ripple al salir de su
+sitio), se cortan, se estiran, se aceptan o desactivan y se suben de pista; todo pasa
+por el historial. El documento es `views/montaje.json` (`editorial-montaje/1`), atado
+a la huella del medio; la AI (Tarea 5) propone clips y la persona los corrige; lo
+`accepted` y lo `edited` no lo pisa una pasada nueva. **Solo «Exportar montaje»**
+renderiza: un video con los clips activos en su orden y su proyecto hijo con
+`derivation.segments` en ese orden. La duración objetivo por defecto es 15 minutos
+(±15 %), configurable.
+
 ## 11. Archivos esperados de la Fase 1
 
 La estructura existente se conserva. Se agregan `layers/`, mapas/vistas de temas en

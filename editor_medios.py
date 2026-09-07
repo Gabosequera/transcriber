@@ -84,6 +84,13 @@ class EditorMedios:
         # en su pila de deshacer (diseño §4). Sin dueño con historial, fn() a secas.
         self.transaccion = None
         self._drag_extra = None                # (gesto, y0) del carril extra que capturó B1
+        # mapa de tiempo del dueño (modo Montaje, plan §7.3): el timeline, el playhead y
+        # el reloj trabajan en tiempo de SECUENCIA; el reproductor y los frames en tiempo
+        # FUENTE. `mapa_tiempo.to_source(seq)` → tramo con `source_t` (None en un hueco),
+        # `siguiente(tramo)` → el tramo que sigue, `from_source(src, tramo)` → seq,
+        # `extent` → largo de la secuencia. None = modo Fuente (identidad).
+        self.mapa_tiempo = None
+        self._piece = None                     # tramo del montaje que reproduce la sesión
 
         self.q: queue.Queue = queue.Queue()
         self._gen = 0                          # token de generación (cambio de video)
@@ -322,6 +329,23 @@ class EditorMedios:
     def status(self, m):
         self.lbl_status.configure(text=m)
 
+    def _dur(self) -> float:
+        """Largo de la línea de tiempo VISIBLE: el medio en modo Fuente, la secuencia
+        del montaje cuando el dueño instaló `mapa_tiempo`."""
+        if self.mapa_tiempo is not None:
+            return float(getattr(self.mapa_tiempo, "extent", 0.0) or 0.0)
+        return float(self.info["duracion"]) if self.info else 0.0
+
+    def _src_of(self, t):
+        """(tiempo fuente, tramo) para el tiempo de línea `t`: identidad en modo Fuente;
+        en un hueco del montaje (None, None)."""
+        if self.mapa_tiempo is None:
+            return t, None
+        piece = self.mapa_tiempo.to_source(t)
+        if piece is None:
+            return None, None
+        return piece["source_t"], piece
+
     def geo(self):
         return self._geo()
 
@@ -381,6 +405,8 @@ class EditorMedios:
         self._frame_pil = None
         self.t_play = 0.0
         self.view = [0.0, 0.0]
+        self.mapa_tiempo = None
+        self._piece = None
         if self.reg is not None:       # la instancia es compartida: soltar la suscripción
             self.reg.desuscribir(self._on_reg_cambio)
         self.reg = None
@@ -465,7 +491,7 @@ class EditorMedios:
         y (con debounce corto) el frame del preview — audio y video comparten ESTE tiempo.
         Pausado: primero intenta el CACHÉ de prefetch (display instantáneo del scrub) y
         re-apunta la ventana de prefetch con debounce."""
-        dur = self.info["duracion"] if self.info else 0.0
+        dur = self._dur() if self.info else 0.0
         self.t_play = min(max(0.0, t), max(dur - 0.05, 0.0))
         self.lbl_t.configure(text=self._texto_reloj())
         if self.on_playhead:
@@ -475,20 +501,23 @@ class EditorMedios:
         else:
             self._mover_linea_playhead()
         if frame and self.info and self.info.get("video") and not self._playback_activo():
-            self._t_pedido = self.t_play
+            src, _ = self._src_of(self.t_play)
+            if src is None:
+                return                         # hueco del montaje: se conserva el último frame
+            self._t_pedido = src
             W,_ = self._dims_preview()
             width=min(max(480,W),self.info['video'].get('display_width',self.info['video']['width']))
-            exact=self._exact_frames.get(self.t_play,width)
+            exact=self._exact_frames.get(src,width)
             if exact is not None:
                 self._mostrar_frame(exact)
                 return
-            hit = self._fcache_hit(self.t_play)
+            hit = self._fcache_hit(src)
             if hit is not None:
                 self._frame_pil = hit
                 self._frame_rev += 1
                 self._redibujar()              # aproximado YA; el exacto llega y pisa
-            self._t_pedido = self.t_play
-            self.f.after(120, self._pedir_frame, self.t_play)
+            self._t_pedido = src
+            self.f.after(120, self._pedir_frame, src)
             self._reapuntar_prefetch()
 
     def _texto_reloj(self) -> str:
@@ -532,7 +561,7 @@ class EditorMedios:
         """Fija el rango a repetir [a, b] (acotado al medio, al menos 50 ms)."""
         if not self.info:
             return
-        dur = self.info["duracion"]
+        dur = self._dur()
         a, b = sorted((min(max(float(a), 0.0), dur), min(max(float(b), 0.0), dur)))
         if b - a < 0.05:
             return
@@ -561,7 +590,7 @@ class EditorMedios:
 
     def _loop_set_in(self, t=None):
         t = self.t_play if t is None else t
-        b = self.loop[1] if self.loop and self.loop[1] > t + 0.05 else self.info["duracion"]
+        b = self.loop[1] if self.loop and self.loop[1] > t + 0.05 else self._dur()
         self._set_loop(t, b)
 
     def _loop_set_out(self, t=None):
@@ -587,7 +616,7 @@ class EditorMedios:
     def _tl_press3(self, e):
         g = self._tl_geo()
         if self.info and g and e.y < RULER_H:
-            t = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+            t = min(max(self._x2t(e.x, g), 0.0), self._dur())
             self._drag_loop = dict(kind="right", t0=t, t1=t, x0=e.x, x1=e.x,
                                    state=int(getattr(e, "state", 0) or 0))
             return "break"
@@ -598,7 +627,7 @@ class EditorMedios:
         g = self._tl_geo()
         if not g or d is None or d.get("kind") != "right":
             return None
-        d["t1"] = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+        d["t1"] = min(max(self._x2t(e.x, g), 0.0), self._dur())
         d["x1"] = e.x
         self.tl.delete("loop-drag")
         shift = bool(d["state"] & 0x1)
@@ -782,8 +811,9 @@ class EditorMedios:
         playhead actual y re-ancla; el stream de video y el tick vivos siguen. Mezcla
         vacía o ffplay caído → sesión entera abajo (nunca un stream sin dueño)."""
         pistas = self._activas()
-        motivo = self.repro.play(self.info["path"], pistas, self.t_play, rate=self.rate) \
-            if pistas else "no hay pistas activas (todo muteado)"
+        src, _ = self._src_of(self.t_play)
+        motivo = self.repro.play(self.info["path"], pistas, src if src is not None else self.t_play,
+                                 rate=self.rate) if pistas else "no hay pistas activas (todo muteado)"
         if motivo:
             self._stop_preview()
             self.btn_play.configure(text="▶")
@@ -839,8 +869,11 @@ class EditorMedios:
         if not self.info or not self.info.get("video") or self._playback_activo() \
                 or self._drag_marca is not None:
             return
+        src, _ = self._src_of(self.t_play)
+        if src is None:
+            return
         W, H = self._dims_preview()
-        self._prefetch.apuntar(self.info["path"], self.t_play, W, H,
+        self._prefetch.apuntar(self.info["path"], src, W, H,
                                (self._gen, self._preview_epoch),
                                dur_total=self.info["duracion"])
 
@@ -863,7 +896,7 @@ class EditorMedios:
         return t0 + (x - x0) / ancho * span
 
     def _clamp_view(self):
-        dur = self.info["duracion"]
+        dur = max(self._dur(), SPAN_MIN)
         self.view[1] = min(max(self.view[1], SPAN_MIN), dur) if dur > SPAN_MIN else dur
         self.view[0] = min(max(0.0, self.view[0]), dur - self.view[1])
 
@@ -888,7 +921,7 @@ class EditorMedios:
 
     def _fit(self):
         if self.info:
-            self.view = [0.0, self.info["duracion"]]
+            self.view = [0.0, max(self._dur(), SPAN_MIN)]
             self._dibujar_timeline()
 
     def zoom_a(self, a, b, margen=0.1):
@@ -932,7 +965,7 @@ class EditorMedios:
         if texto is None:
             return
         try:
-            t = editorial_nav.parse_goto(texto, self.t_play, self.info["duracion"])
+            t = editorial_nav.parse_goto(texto, self.t_play, self._dur())
         except ValueError as error:
             self.status(f"⚠ {error}")
             return
@@ -979,7 +1012,7 @@ class EditorMedios:
         if not self.info:
             return False
         t0, span = self.view
-        if span <= 0 or span >= self.info["duracion"] - 1e-6:
+        if span <= 0 or span >= self._dur() - 1e-6:
             return False
         if t > t0 + span * 0.92:
             self.view[0] = t - span * 0.1
@@ -1086,7 +1119,7 @@ class EditorMedios:
             return
         d = self._drag_loop
         if d is not None and d.get("kind") == "handle":
-            t = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+            t = min(max(self._x2t(e.x, g), 0.0), self._dur())
             a, b = self.loop
             self._set_loop(*((t, b) if d["edge"] == "in" else (a, t)), quiet=True)
             return
@@ -1359,7 +1392,7 @@ class EditorMedios:
             "nav.step_prev_5": lambda: self._mover_playhead(self.t_play - 5.0),
             "nav.step_next_5": lambda: self._mover_playhead(self.t_play + 5.0),
             "nav.home": lambda: self._mover_playhead(0.0),
-            "nav.end": lambda: self._mover_playhead(self.info["duracion"]),
+            "nav.end": lambda: self._mover_playhead(self._dur()),
             "view.zoom_in": lambda: self._zoom(1.5),
             "view.zoom_out": lambda: self._zoom(1 / 1.5),
             "view.fit": self._fit,
@@ -1513,7 +1546,7 @@ class EditorMedios:
         if not env:
             return None
         clave = (round(self.view[0], 4), round(self.view[1], 4), ancho,
-                 self._tiles_ver, pista["idx"])
+                 self._tiles_ver, pista["idx"], id(self.mapa_tiempo))
         if self._wave_keys.get(fila) == clave:
             return self._wave_imgs.get(fila)
         if clave in self._wave_view_cache:
@@ -1564,12 +1597,21 @@ class EditorMedios:
         nivel = self._nivel_zoom(ancho)
         dens = float(2 ** nivel)               # buckets/s de los tiles
         dens_g = len(env) / dur if dur else 0  # buckets/s de la global
-        usar_tiles = dens > dens_g * 1.5
+        mapa = self.mapa_tiempo
+        usar_tiles = dens > dens_g * 1.5 and mapa is None   # en Montaje, la global basta
         dur_tile = TILE_B / dens
         out = []
         for px in range(ancho):
             ta = t0 + px / ancho * span
             tb = t0 + (px + 1) / ancho * span
+            if mapa is not None:               # píxel de secuencia → tramo fuente (plan §7.2)
+                piece = mapa.to_source(ta)
+                if piece is None or ta >= piece["seq_fin"] - 1e-9:
+                    out.append((None, None, None))
+                    continue
+                largo = tb - ta
+                ta = piece["source_t"]
+                tb = min(ta + largo, piece["source_fin"])
             seg = None
             if usar_tiles:
                 seg = self._buckets_tiles(idx, nivel, dens, dur_tile, ta, tb)
@@ -1601,8 +1643,8 @@ class EditorMedios:
     def _pedir_tiles(self, ancho):
         """Encola los tiles VISIBLES que faltan (latest-wins: el pedido nuevo reemplaza
         al pendiente; el worker es único y cancelable — consenso q.5)."""
-        if not self.info:
-            return
+        if not self.info or self.mapa_tiempo is not None:
+            return                             # en Montaje se dibuja con la envolvente global
         nivel = self._nivel_zoom(ancho)
         dens = float(2 ** nivel)
         dur = self.info["duracion"]
@@ -1936,7 +1978,21 @@ class EditorMedios:
                 return
             self.f.after(30,self._anim_tick,tok)
             return
-        self.t_play = clock_position
+        if self._piece is not None and self.mapa_tiempo is not None:
+            # modo Montaje: el reloj corre en tiempo FUENTE dentro del tramo; al llegar a
+            # su fin, re-sesión desde el tramo siguiente (mismo coste que un seek) o fin
+            piece = self._piece
+            if clock_position >= piece["source_fin"] - 0.02:
+                following = self.mapa_tiempo.siguiente(piece)
+                if following is not None:
+                    self._play(reiniciar=True, desde=following["seq_ini"])
+                else:
+                    self.repro.stop()
+                    self.t_play = piece["seq_fin"]
+                return
+            self.t_play = self.mapa_tiempo.from_source(clock_position, piece)
+        else:
+            self.t_play = clock_position
         if self._play_metrics.get("audio_clock_ms") is None:
             self._play_metrics["audio_clock_ms"] = round(self.repro.clock.first_clock_s*1000,1)
             self.status(f"▶ reloj de audio · 1er frame {self._play_metrics.get('first_frame_ms')} ms"
@@ -1952,7 +2008,7 @@ class EditorMedios:
         if self.loop is not None and self.loop[0] <= self.t_play and self.t_play >= self.loop[1]:
             self._play(reiniciar=True, desde=self.loop[0])     # repetir: otra sesión desde la entrada
             return
-        if self.info and self.t_play >= self.info["duracion"]:
+        if self.info and self.t_play >= self._dur():
             self.repro.stop()
         self.lbl_t.configure(text=self._texto_reloj())
         if self.on_playhead:
@@ -1962,7 +2018,7 @@ class EditorMedios:
         else:
             self._mover_linea_playhead()
         if self._vses is not None:
-            img = self._vses.frame_para(self.t_play)
+            img = self._vses.frame_para(clock_position)
             if img is not None:
                 self._mostrar_frame(img)
             if self._vses.fallida:
@@ -2043,19 +2099,30 @@ class EditorMedios:
             return
         if not self.info:
             return
-        t = self.t_play if desde is None else max(0.0, min(desde, self.info["duracion"]))
+        t = self.t_play if desde is None else max(0.0, min(desde, self._dur()))
+        src, piece = self._src_of(t)
+        if self.mapa_tiempo is not None and src is None:
+            # hueco o fin de la secuencia: arrancar en el tramo siguiente, si lo hay
+            following = self.mapa_tiempo.siguiente(t)
+            if following is None:
+                self._stop_preview()
+                self.btn_play.configure(text="▶")
+                self.status("fin del montaje: no hay más clips desde aquí")
+                return
+            t, src, piece = following["seq_ini"], following["source_t"], following
         self._stop_preview()                   # sesión anterior (si reiniciar) + epoch
         tok = self._anim_tok
         self.t_play = t
+        self._piece = piece
         if self.info.get("video"):
             W, H = self._dims_preview()
             try:
-                self._vses = medios.SesionVideo(self.info["path"], t, W, H,
+                self._vses = medios.SesionVideo(self.info["path"], src, W, H,
                                                 info=self.info, log=self.status,
                                                 rate=self.rate)
             except ValueError:
                 self._vses = None
-        self._warmup = (t, time.monotonic())   # las pistas se leen AL arrancar el
+        self._warmup = (src, time.monotonic()) # las pistas se leen AL arrancar el
         self.btn_play.configure(text="⏹")      # audio (r3.5: mute durante el warm-up)
         self.f.after(30, self._anim_tick, tok)
 

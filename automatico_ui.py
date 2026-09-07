@@ -240,7 +240,9 @@ class AutomaticWorkspace:
 
     def __init__(self, parent):
         from editorial_layers_ui import LayersController
+        from editorial_montaje_ui import MontageController
         self.layers = LayersController(self)
+        self.montage = MontageController(self)
         self._last_layers_stamp = None
         self._last_topics_stamp = None
         self.info = None
@@ -307,7 +309,7 @@ class AutomaticWorkspace:
                                    on_video_cargado=self._on_media_loaded,
                                    carriles_extra=self._cut_lanes,
                                    on_playhead=self._on_playhead,
-                                   acciones_extra=self.layers.action, marcas_en_capas=True)
+                                   acciones_extra=self._action, marcas_en_capas=True)
         self.editor.f.grid(row=0, column=0, sticky="nsew")
         # las marcas que escribe el editor (M, I/O, X, prompt, arrastre) entran al
         # historial de deshacer del proyecto (diseño §4)
@@ -334,10 +336,18 @@ class AutomaticWorkspace:
             button = toolbar_ui.tool_button(self.editor.fr_tools, glyph, action, self.editor.ejecutar, width=30)
             button.grid(row=0, column=col, padx=1)
             self.tool_buttons[action] = button
+        # conmutador Fuente | Montaje (plan §7.2) en la columna libre del transporte
+        self.mode_bar = ctk.CTkSegmentedButton(self.editor.fr_transporte, values=["Fuente", "Montaje"],
+                                               height=28, font=ctk.CTkFont(size=11),
+                                               command=self._mode_picked)
+        self.mode_bar.set("Fuente")
+        self.mode_bar.grid(row=0, column=4, padx=(8, 4))
+        toolbar_ui.Tooltip(self.mode_bar, lambda: "Fuente: el medio con sus capas y recortes. Montaje: la "
+                           "secuencia de clips (V1 abajo, V2 encima). " + keymap.tooltip_text("view.mode_montage"))
         # el menú contextual del editor (click derecho y ⋮) muestra primero el item
         # bajo el cursor y después todas las acciones que este dueño atiende
-        self.editor.menu_extra = self.layers.menu_items
-        self.editor.acciones_soportadas = self.layers.supported_actions
+        self.editor.menu_extra = self._menu_items
+        self.editor.acciones_soportadas = self._supported_actions
         # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
         # en la fila libre del editor (entre el timeline y el status) — nada de
         # escribirlo en el status, cuyo wrap movía timeline y preview con cada hover
@@ -346,8 +356,8 @@ class AutomaticWorkspace:
             text=TEXT, text_soft="#c6cec9"))
         # hover = tooltip + barra de detalle · salir del timeline vuelve a la selección
         # · click derecho = menú · click en MARCAS deselecciona
-        self.editor.tl.bind("<Motion>", self.layers.hover, add=True)
-        self.editor.tl.bind("<Leave>", self.layers.leave, add=True)
+        self.editor.tl.bind("<Motion>", self._hover, add=True)
+        self.editor.tl.bind("<Leave>", self._leave, add=True)
 
         self._build_sash(body)
         self._panel_width = self._clamp_panel(hardware.load().get("automatico_panel_width"))
@@ -514,10 +524,104 @@ class AutomaticWorkspace:
         self.cycle_label.grid(row=17, column=0, sticky="ew", padx=14, pady=(0, 12))
         self._last_import_error = None
         self._cycle_text = None
+        # ---- MONTAJE (plan §7): estado de la secuencia y su exportación ----
+        self.montage_box = ctk.CTkFrame(panel, fg_color=SURFACE_RAISED, corner_radius=8)
+        self.montage_box.grid(row=18, column=0, sticky="ew", padx=14, pady=(0, 12))
+        self.montage_box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self.montage_box, text="MONTAJE", text_color=MUTED,
+                     font=ctk.CTkFont(size=10, weight="bold")).grid(row=0, column=0, sticky="w", padx=10, pady=(6, 2))
+        self.montage_status = ctk.CTkLabel(self.montage_box, text="Sin clips.", text_color=MUTED, anchor="w",
+                                           justify="left", wraplength=max(140, self._panel_width - 48),
+                                           font=ctk.CTkFont(size=10))
+        self.montage_status.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
+        self.montage_export_button = ctk.CTkButton(self.montage_box, text="Exportar montaje", height=28,
+                                                   state="disabled", fg_color="#8a5a24", hover_color="#a06a2b",
+                                                   command=self._export_montage)
+        self.montage_export_button.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 8))
+        tip(self.montage_export_button, "Renderiza la secuencia del montaje (clips activos, en su orden) en "
+                                        "un solo video con su proyecto hijo. El medio no se toca.")
+        self.montage_box.grid_remove()          # aparece con clips o en modo Montaje
 
     def _tool_picked(self, label):
         self.layers.set_tool("cut" if label == "Corte" else "select")
         self.editor.tl.focus_set()
+
+    # ---- modo Fuente | Montaje (plan §7.2) ----
+    def _mode_picked(self, label):
+        self.set_mode("montage" if label == "Montaje" else "source")
+        self.editor.tl.focus_set()
+
+    def set_mode(self, mode):
+        if mode == "montage" and not self.layers.store:
+            self._append_log("Para el montaje hace falta la metadata del medio.")
+            self.mode_bar.set("Fuente")
+            return
+        self.montage.set_mode(mode)
+        self.mode_bar.set("Montaje" if self.montage.mode == "montage" else "Fuente")
+        self.layers.leave()
+        self.montage_changed()
+
+    def montage_changed(self):
+        """Tras cada escritura del montaje o cambio de modo: caja MONTAJE y botón."""
+        import editorial_montaje
+        doc = self.montage.doc
+        summary = editorial_montaje.stats(doc) if doc else None
+        show = self.montage.mode == "montage" or bool(summary and summary["total"])
+        if show:
+            self.montage_box.grid()
+        else:
+            self.montage_box.grid_remove()
+        if summary and summary["total"]:
+            target = float(doc.get("target_seconds") or 0)
+            text = (f"{summary['total']} clips ({summary['enabled']} activos) en {summary['tracks'] - 1 or 1} "
+                    f"pista(s) · {format_time(summary['total_seconds'])[3:]}"
+                    + (f" de {target / 60:.0f} min objetivo" if target else "")
+                    + f" · AI {summary['by_origin']['ai']} · tuyos {summary['by_origin']['user']}")
+        else:
+            text = ("Sin clips. En modo Fuente selecciona un item y pulsa Ctrl+Shift+A, o pide "
+                    "«Montaje por temas» a la AI.")
+        self.montage_status.configure(text=text)
+        ready = bool(summary and summary["enabled"]) and bool(self.info) and not (
+            self.worker and self.worker.is_alive())
+        self.montage_export_button.configure(state="normal" if ready else "disabled")
+
+    def _action(self, action, e=None):
+        """`acciones_extra` del editor: el modo decide quién atiende primero."""
+        if action == "view.mode_montage":
+            self.set_mode("source" if self.montage.mode == "montage" else "montage")
+            return True
+        if action.startswith("montage.") or self.montage.mode == "montage":
+            try:
+                if self.montage.action(action, e):
+                    return True
+            except Exception as error:
+                self.editor.status(f"⚠ {error}")
+                return True
+            if self.montage.mode == "montage":
+                return False                  # transporte, zoom…: el editor
+        return self.layers.action(action, e)
+
+    def _hover(self, e):
+        if self.montage.mode == "montage":
+            self.montage.hover(e)
+        else:
+            self.layers.hover(e)
+
+    def _leave(self, e=None):
+        if self.montage.mode == "montage":
+            self.montage.leave(e)
+        else:
+            self.layers.leave(e)
+
+    def _menu_items(self, e, menu):
+        if self.montage.mode == "montage":
+            return self.montage.menu_items(e, menu)
+        return self.layers.menu_items(e, menu)
+
+    def _supported_actions(self):
+        if self.montage.mode == "montage":
+            return self.montage.supported_actions()
+        return self.layers.supported_actions() | self.montage.supported_actions()
 
     # ---- formato de salida ----
     def _export_format(self) -> str:
@@ -563,7 +667,7 @@ class AutomaticWorkspace:
     def _apply_panel_width(self, width: int):
         self._panel_width = width
         self.panel.configure(width=width)
-        for label in (self.trims_status, self.format_help, self.cycle_label):
+        for label in (self.trims_status, self.format_help, self.cycle_label, self.montage_status):
             label.configure(wraplength=max(140, width - 48))
 
     def _sash_leave(self, _e=None):
@@ -768,6 +872,8 @@ class AutomaticWorkspace:
             self.output_entry.insert(0, path)
 
     def _on_media_loaded(self, info, fingerprint):
+        self.montage.reset()
+        self.mode_bar.set("Fuente")
         self.layers.store = None
         self.layers.selected = None
         self.layers.sync_detail()
@@ -811,6 +917,7 @@ class AutomaticWorkspace:
         self.open_export_button.grid_remove()
         self._refresh_child_mode()
         self._refresh_cycle_label()
+        self.montage_changed()
         generation = self.editor._gen
         def discover():
             import editorial_catalog
@@ -988,9 +1095,14 @@ class AutomaticWorkspace:
                         self.layers.store = event["store"]
                         self.layers.lane_order = editorial_layers.load_lane_order(event["store"].root)
                         self.layers.history.clear()          # historial por medio cargado
+                        try:
+                            self.montage.load(event["master"], event["store"].master)
+                        except (ValueError, OSError) as error:
+                            self._append_log(f"Montaje: {error}")
                         self.editor.refrescar_layout()
                         self._refresh_child_mode()
                         self._refresh_cycle_label()
+                        self.montage_changed()
                 elif kind == "layers_imported":
                     self._last_import_error = None
                     self._background_done()
@@ -1180,6 +1292,7 @@ class AutomaticWorkspace:
         for button in (self.ai_button, self.ai_arrow):
             button.configure(state="normal" if ai_ready else "disabled")
         self._refresh_cycle_label()
+        self.montage_changed()
 
     def _background(self, work, *, label=None):
         if self.worker and self.worker.is_alive():
@@ -1592,9 +1705,46 @@ class AutomaticWorkspace:
         self.open_export_button.grid_remove()
         self.editor.cargar(str(video))
 
-    # ---- carriles: bloques (read-only) + recortes (interactivo) ----
+    # ---- carriles: bloques (read-only) + recortes (interactivo); en modo Montaje, las
+    # pistas de video del montaje ----
     def _cut_lanes(self):
+        if self.montage.mode == "montage":
+            return self.montage.lanes()
         return self.layers.lanes()
+
+    def _export_montage(self):
+        """«Exportar montaje»: un solo video con los clips activos en su orden."""
+        import editorial_montaje
+        doc = self.montage.doc
+        if not self.info or not doc or not editorial_montaje.stats(doc)["enabled"]:
+            messagebox.showinfo("Sin clips", "El montaje no tiene clips activos.")
+            return
+        fmt = self._export_format()
+        if fmt == "copy":
+            messagebox.showinfo("Copia exacta", "Unir tramos exige recodificar: elige otro formato de salida.")
+            return
+        master, source = self._master_path(), self.info["path"]
+        output = dialogs.open_dir("Carpeta para el montaje", remember="podcast_exports")
+        if not output:
+            return
+        layers = self.layers.store.visible() if self.layers.store else None
+        lane_order = list(self.layers.lane_order)
+        frozen = copy.deepcopy(doc)
+        self.progress.set(0)
+        self.pipeline_title.configure(text="Exportando el montaje…")
+        summary = editorial_montaje.stats(doc)
+        self._append_log(f"Montaje: {summary['enabled']} clips, {format_time(summary['total_seconds'])}…")
+
+        def work():
+            with editorial_pipeline._RunLock(master.parent / ".work"):
+                destination = podcast_export.export_montage(
+                    master, frozen, source, output, fmt=fmt, layers=layers, lane_order=lane_order,
+                    cancel=self.cancel,
+                    progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
+                    log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
+            self.events.put({"tipo": "export_done", "path": str(destination), "trimmed": True,
+                             "montage": True})
+        self._background(work, label="export:montage")
 
     def _import_layers(self, path):
         if not self.layers.store:
@@ -1681,7 +1831,7 @@ class AutomaticWorkspace:
         """Reproducción con «saltar recortes»: al entrar en un recorte activo se re-arranca la
         sesión al final del recorte (una vez por recorte; el re-arranque tarda unos cientos
         de ms — es una ayuda de revisión, no el render)."""
-        if not self._skip_intervals or not self.skip_check.get():
+        if not self._skip_intervals or not self.skip_check.get() or self.montage.mode == "montage":
             return
         if not self.editor._playback_activo() or self.editor._warmup is not None:
             return

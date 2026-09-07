@@ -732,3 +732,27 @@ con recortes» pasa las capas visibles y, al terminar con un solo archivo, muest
 huella o, si el catálogo aún no lo tiene, por la ruta del master exportado). Dos
 tests nuevos (remapeo puro con jerarquía y exportación real con `layers/` en el hijo)
 y el smoke pulsa el botón y comprueba los rangos heredados de la capa de temas.
+
+## 2026-09-07 — Timeline de montaje: clips, pistas de video, preview y exportación (0.3.9)
+
+Fase D del plan, la grande. Para que la AI pueda «editar de verdad» (reordenar tramos,
+apilar clips) el timeline gana un modo **Montaje** (conmutador Fuente | Montaje, Ctrl+M):
+la regla mide la secuencia, las pistas de video `V1`, `V2`… se apilan (la de arriba
+tapa; siempre hay una vacía encima para arrastrar hacia arriba), una franja fina dice
+de qué tema es cada clip, y las waveforms se componen en tiempo de secuencia. Modelo
+puro `editorial_montaje.py` (`views/montaje.json`, `editorial-montaje/1`): aplanado por
+intervalos con la pista más alta al mando, insert con ripple y overwrite, split, trim
+acotado, remove con ripple, desplazamiento de conjuntos, mapa secuencia↔fuente. El
+editor recibe un `mapa_tiempo`: el playhead, el reloj y la regla viven en secuencia; la
+sesión de video, el audio y los frames en fuente; al terminar un tramo la reproducción
+se re-arma desde el siguiente (el mismo mecanismo de «saltar recortes», ≈1 s por junta
+en HEVC, aceptado en esta etapa). Gestos: mover con imán y cambio de pista, bordes,
+Corte, Shift-multiselección; teclas S/[/]/E/X/P/Supr/Tab/↑↓ y las nuevas del grupo
+Montaje (Ctrl+Shift+A añade la selección de la fuente, Ctrl+Shift+T el tema,
+Ctrl+Shift+R revela la fuente, Ctrl+Shift+↑/↓ cambian de pista); deshacer/rehacer
+por el documento `montaje` del historial. `podcast_export.export_montage` renderiza un
+solo video con los tramos en orden de secuencia (el script de filtros ya concatenaba en
+el orden de la lista) y publica un hijo con segmentos no cronológicos
+(`time_map(chronological=False)`). Caja MONTAJE en el panel con estado y «Exportar
+montaje». 11 tests nuevos (modelo, historial, exportación real no cronológica con
+hijo) y bloque del smoke con captura (`--screenshot`). 146 tests.

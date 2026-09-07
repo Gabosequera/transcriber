@@ -152,6 +152,8 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
 | editorial_trims.py | RECORTES: heurística de huecos sin voz (+ actividad RMS por pista), documento `views/trims.json`, validación/merge de `trims.proposed.json` de la AI, paquete de revisión por bloque, unión de intervalos y segmentos conservados |
 | podcast_export.py | exportación de bloques (plan) y de bloques recortados (`trim`/`atrim` + `concat` por script de filtros; sondea `-/filter_complex` vs `-filter_complex_script`) |
 | editorial_cycle.py | estado del ciclo con la AI leído de `views/` (pedido vigente, pasadas validadas, propuesta importada, «pedido viejo» por digest de capas, último error); puro, alimenta la etiqueta del panel |
+| editorial_montaje.py | MONTAJE: documento `views/montaje.json` (clips con `source_*`/`seq_ini` en pistas `V1`, `V2`…), `flatten` (la de arriba tapa; con o sin huecos), operaciones puras (add/split/move insert·overwrite/trim/remove ripple/shift/set_state), `SequenceMap` secuencia↔fuente para el reproductor |
+| editorial_montaje_ui.py | `MontageController`: modo Fuente/Montaje, carriles de pistas + franja de temas, gestos (mover con imán y cambio de pista, bordes, Corte), teclas, menú, diálogo; escribe por `save()` dentro de `transact` (documento `montaje`) |
 | medios.py | ffprobe/fingerprint/FLAC/waveform/frames/Job Object + reproductor del preview (§3.1) |
 | hardware.py | config global (config.json) + detección CPU/GPU/hilos |
 | audiocache.py / jobs.py / models.py | caché de audio, lock de jobs, unload de modelos |
@@ -445,6 +447,12 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   se reconstruye. Los cambios de esquema son aditivos (`accepted`, `lane`, `lanes`,
   `kind: "ai"`, `layers: [...]`) y todo archivo antiguo carga sin migración. La fusión
   de solapes nunca cruza carriles ni estados `enabled`.
+- **Modo Montaje = mismo editor, otro reloj**: `EditorMedios.mapa_tiempo` es la única
+  frontera entre tiempo de secuencia (timeline, playhead, reloj, loop) y tiempo fuente
+  (sesión de video, audio, frames, prefetch). Todo lo que pida un frame o arranque
+  audio pasa por `_src_of`; todo lo que mida la línea pasa por `_dur()`. Nunca mezclar
+  los dos relojes en un mismo cálculo, y nunca escribir el montaje fuera de
+  `MontageController.save` dentro de `transact`.
 - **Todo cambio escrito desde el timeline queda en el historial**: si añades un punto
   de escritura, envuélvelo en `LayersController.transact` (o registra en el hilo de UI
   con el `before` tomado antes del worker) y prueba su undo/redo. Restaurar siempre por
@@ -598,6 +606,45 @@ intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
   un recorte, rango que cruza, jerarquía, ffmpeg real: el hijo contiene `layers/` y
   `lanes.json`); el smoke exporta con capas, pulsa el botón y comprueba los rangos
   remapeados de la capa de temas.
+- **Fase D (hecha, 0.3.9)** — timeline de montaje. D1 `editorial_montaje.py` (puro):
+  `editorial-montaje/1` con `media` (identidad), `duration_source`, `target_seconds`,
+  `tracks` (`V<n>`; un documento sin `tracks` los deriva de sus clips + `V1`), `clips`
+  (`clip-NNNNNN`, `track_id`, `source_ini/fin`, `seq_ini`, `label`, `topic_ids`,
+  `origin` ai|user, `state`, `edited`, `reason`, `confidence`, `junction_note`),
+  `analysis`; `validate_document` (identidad, finitos, ids, sin solapes en la misma
+  pista, `next_id`), `save_document` (revisión +1, identidad de dicts), `flatten`
+  (por intervalos elementales manda la pista más alta; tramos contiguos del mismo clip
+  se funden; `gaps=True` conserva los huecos con sus `seq_*` colocados, sin él se
+  recompactan: es lo que exporta), `total_seconds`/`extent`, `seq_to_source`/
+  `source_to_seq` (lista), `SequenceMap` (bisect), `add_clip` (`at=None` al final),
+  `split`, `move` (`insert`: sale de su pista con ripple, entra en el borde más cercano
+  y desplaza los de después; `overwrite`: recorta/parte/borra lo que tapa), `trim_edge`
+  acotado por `edge_limits`, `remove(ripple)`, `ripple_close_gaps`, `shift_clips`
+  (conjunto sin ripple, valida solapes), `ensure_track`/`ensure_spare_track` (siempre
+  una vacía encima), `set_state`, `update_clip`, `clip_edges`, `ordered_clips`,
+  `content_digest`. D4 `podcast_export.export_montage`: un archivo con `-ss origin -t
+  duration` y `filter_script(kept=tramos en orden de secuencia)`; tolerancia 2 frames +
+  1 por junta; `exports.json` `editorial-montage-export/1` con `pieces`; hijo con
+  `publish_child(..., chronological=False)` (`time_map(chronological=False)` admite
+  orden libre y repetidos). D2/D3: `EditorMedios.mapa_tiempo` (None = Fuente):
+  `_dur()` reemplaza `info["duracion"]` en regla/zoom/loop/nav, `_src_of(t)` traduce
+  el playhead a fuente para frames, prefetch y mute/solo; `_play` arranca la sesión en
+  `source_t` del tramo y guarda `_piece`; `_anim_tick` convierte el reloj de audio
+  (fuente) a secuencia y al fin del tramo re-arma desde `siguiente()` (o para);
+  `_datos_vista` mapea cada píxel a su tramo fuente (waveform en tiempo de secuencia
+  con la envolvente global; sin tiles en este modo). `MontageController` (ver §3),
+  `LayersController` gana el documento `montaje` (`_doc_snapshot/_doc_restore` →
+  `montage.restore`, None = borrar el archivo) y `_after_write` refresca el montaje.
+  Workspace: `mode_bar` Fuente|Montaje en la col. 4 del transporte, `_action`/`_hover`/
+  `_menu_items`/`_supported_actions` despachan por modo, caja MONTAJE con estado y
+  «Exportar montaje», `montage.load` en `layers_loaded`. Keymap: grupo «Montaje»
+  (`view.mode_montage` Ctrl+M, `montage.add_selection` Ctrl+Shift+A, `add_topic`
+  Ctrl+Shift+T, `reveal_source` Ctrl+Shift+R, `move_up/down` Ctrl+Shift+↑/↓, `export`).
+  Tests `tests/test_montaje.py` (11: modelo, undo/redo con `HistoryStack`, export real
+  no cronológico con hijo) y bloque del smoke (tres clips, arrastre a V2, waveform,
+  preview con salto de tramo, Ctrl+Z/R, split, X, Tab, revelar; `--screenshot`).
+  Pendiente conocido: el preview acepta ~1 s por junta (re-sesión); el proxy
+  pre-renderizado queda como mejora.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

@@ -339,6 +339,96 @@ def _rename_with_retry(source, destination, *, attempts: int = 8):
             time.sleep(0.05 * 2 ** attempt)
 
 
+def export_montage(master_path, montage, source, output_dir, *, fmt=DEFAULT_FORMAT, layers=None,
+                   lane_order=None, cancel=None, progress_cb=None, log_cb=None):
+    """Renderiza el montaje (plan §7.4): UN archivo con los tramos aplanados en ORDEN
+    DE SECUENCIA (`filter_script` concatena en el orden de la lista, así que un orden
+    no cronológico funciona sin cambios), sin `-ss/-t` de bloque. Escribe
+    `exports.json` (`editorial-montage-export/1`), `accepted-montage.json` (el
+    documento congelado) y publica un proyecto hijo con `derivation.segments` en
+    ese orden: el «último video antes de Resolve» también tiene su master."""
+    import editorial_montaje
+    if fmt not in FORMATS:
+        raise ValueError(f"Formato de salida desconocido: {fmt}")
+    if fmt == "copy":
+        raise ValueError("La copia exacta no puede unir tramos: elige un formato que recodifique.")
+    spec = FORMATS[fmt]
+    master = read_json(master_path)
+    duration = float(master["media"]["duration"])
+    document = editorial_montaje.validate_document(montage, fingerprint=master["media"]["fingerprint"],
+                                                   duration=duration)
+    pieces = editorial_montaje.flatten(document)
+    if not pieces:
+        raise ValueError("El montaje no tiene clips activos.")
+    source = Path(source).resolve()
+    info = medios.inspeccionar(source)
+    if not source_matches(master, source, info):
+        raise ValueError("El video no corresponde a la metadata del proyecto.")
+    output = Path(output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    segments = [(p["source_ini"], p["source_fin"]) for p in pieces]
+    key = {"montage": segments, "format": fmt}
+    destination = output / f"montaje-{digest_json(key)[:12]}"
+    if destination.exists():
+        raise FileExistsError(f"La exportación ya existe: {destination}")
+    cancel = cancel or threading.Event()
+    origin = info["t0"] - float(_container_start(source))
+    has_video = bool(info.get("video"))
+    n_audio = len(info["pistas"])
+    frame = 1.0 / ((info.get("video") or {}).get("fps") or 25) if has_video else 0.03
+    extension = output_container(spec, source, has_video)
+    expected = sum(end - start for start, end in segments)
+    if log_cb:
+        log_cb(f"Formato de salida: {spec['label']} · montaje de {len(pieces)} tramos, "
+               f"{expected / 60:.1f} min")
+    with tempfile.TemporaryDirectory(prefix=".montaje-", dir=output) as temporary:
+        stage = Path(temporary)
+        filename = f"montaje.{extension}"
+        target = stage / filename
+        script = stage / "montaje.filters.txt"
+        script.write_text(filter_script(segments, n_audio, has_video), encoding="utf-8")
+        command = ["ffmpeg", "-hide_banner", "-nostdin", "-n", "-ss", f"{origin:.6f}",
+                   "-t", f"{duration:.6f}", "-i", str(source), filter_script_option(), str(script)]
+        if has_video:
+            command += ["-map", "[vout]"]
+        command += [item for i in range(n_audio) for item in ("-map", f"[ac{i}]")]
+        command += ["-map_metadata", "0", "-map_chapters", "-1"]
+        if has_video:
+            command += spec["video"]
+        command += spec["audio"] if has_video else FORMATS[DEFAULT_FORMAT]["audio"]
+        if extension in ("mp4", "mov", "m4a"):
+            command += ["-movflags", "+faststart"]
+        command += ["-progress", "pipe:1", "-loglevel", "error", str(target)]
+        _encode(command, cancel, progress_cb, expected)
+        script.unlink(missing_ok=True)
+        actual = medios.inspeccionar(target)
+        tolerance = max(0.15, 2 * frame) + len(pieces) * frame
+        if abs(actual["duracion"] - expected) > tolerance or len(actual["pistas"]) != n_audio:
+            raise RuntimeError(f"Duración o pistas incorrectas en {filename}; no se publicó el montaje.")
+        if bool(actual.get("video")) != has_video:
+            raise RuntimeError(f"Falta el video en {filename}.")
+        import editorial_projects
+        child_root = stage / "projects" / "montaje" / "editorial"
+        child = editorial_projects.publish_child(
+            child_root, master, target, segments, parent_path=Path(master_path).resolve(),
+            final_media=destination / filename, layers=layers, lane_order=lane_order,
+            chronological=False)
+        atomic_write_json(stage / "accepted-montage.json", document)
+        atomic_write_json(stage / "exports.json", {
+            "schema": "editorial-montage-export/1", "format": fmt,
+            "files": [{"file": filename, "kept_seconds": round(expected, 3),
+                       "pieces": [[p["seq_ini"], p["seq_fin"], p["source_ini"], p["source_fin"], p["clip_id"]]
+                                  for p in pieces],
+                       "project_master": child.relative_to(stage).as_posix(),
+                       "fingerprint": medios.fingerprint(target, actual)}],
+            "total_seconds": round(expected, 3), "clips": len(document["clips"]),
+            "target_seconds": document.get("target_seconds")})
+        if cancel.is_set():
+            raise InterruptedError("exportación cancelada")
+        _rename_with_retry(stage, destination)
+    return destination
+
+
 def _container_start(source):
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=start_time",
                              "-of", "default=nw=1:nk=1", str(source)], capture_output=True,

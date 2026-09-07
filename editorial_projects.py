@@ -11,11 +11,14 @@ import medios
 from editorial_io import atomic_write_json, read_json, validate_range
 
 
-def time_map(segments, duration):
+def time_map(segments, duration, *, chronological=True):
+    """Mapa hijo↔fuente por segmento. Con `chronological=False` (un montaje, plan
+    §7.4) los segmentos pueden ir en cualquier orden y repetirse: el mapa es por
+    segmento, así que `map_range` sigue valiendo tal cual."""
     result, cursor, previous = [], 0.0, -1.0
     for start, end in segments:
         start, end = validate_range(start, end, duration, label="segmento fuente")
-        if start < previous:
+        if chronological and start < previous:
             raise ValueError("segmentos fuente desordenados o solapados")
         result.append(dict(source_ini=start, source_fin=end,
                            child_ini=round(cursor, 6), child_fin=round(cursor + end - start, 6)))
@@ -52,8 +55,9 @@ def _slice(events, mapping, id_key):
     return sorted(result, key=lambda e: (e["t_ini"], e["t_fin"], e[id_key]))
 
 
-def derive_master(parent, child_info, child_fp, segments, *, name, parent_path=None):
-    mapping = time_map(segments, parent["media"]["duration"])
+def derive_master(parent, child_info, child_fp, segments, *, name, parent_path=None,
+                  chronological=True):
+    mapping = time_map(segments, parent["media"]["duration"], chronological=chronological)
     tracks = {}
     for position, (track_id, original) in enumerate(parent["tracks"].items()):
         track = {key: copy.deepcopy(value) for key, value in original.items()
@@ -180,14 +184,14 @@ def derive_layers(parent_layers, mapping, *, child_fingerprint, child_digest, pa
 
 
 def publish_child(root, parent, media_path, segments, *, parent_path=None, final_media=None,
-                  layers=None, lane_order=None):
+                  layers=None, lane_order=None, chronological=True):
     """Publica el proyecto hijo: master derivado y, si se pasan, las capas del padre
     remapeadas (`layers/<id>.json`) y el orden de carriles (`views/lanes.json`).
     `trims.json` NO se propaga: los recortes ya están aplicados en el hijo."""
     info = medios.inspeccionar(media_path)
     fp = medios.fingerprint(media_path, info)
     master = derive_master(parent, info, fp, segments, name=Path(media_path).stem,
-                           parent_path=parent_path)
+                           parent_path=parent_path, chronological=chronological)
     # No guardar localizadores efímeros del staging.
     master["media"]["path"] = str(final_media or media_path)
     written = editorial_master.write_package(root, master)["master"]

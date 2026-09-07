@@ -75,7 +75,7 @@ class Action:
 
 
 ACTIONS: "OrderedDict[str, Action]" = OrderedDict()
-GROUPS = ("Transporte", "Navegación", "Edición", "Herramientas", "Vista", "Marcas")
+GROUPS = ("Transporte", "Navegación", "Edición", "Herramientas", "Vista", "Montaje", "Marcas")
 
 
 def _register(identifier, label, group, *defaults):
@@ -207,6 +207,16 @@ _register("view.skip_trims", "Saltar recortes al reproducir", "Vista", "Shift+T"
 _register("loop.set_in", "Repetir: entrada en el playhead (o click derecho en la regla)", "Vista")
 _register("loop.set_out", "Repetir: salida en el playhead (o Ctrl+click derecho en la regla)", "Vista")
 _register("loop.clear", "Repetir: quitar el rango (o Shift+click derecho en la regla)", "Vista")
+
+# ---- montaje (plan-montaje-ai.md §7.2): el timeline de secuencia con pistas de video ----
+_register("view.mode_montage", "Modo Fuente / Montaje", "Montaje", "Ctrl+M")
+_register("montage.add_selection", "Añadir al montaje el rango seleccionado (item, IN/OUT o rango a repetir)",
+          "Montaje", "Ctrl+Shift+A")
+_register("montage.add_topic", "Añadir al montaje el tema seleccionado (todos sus tramos)", "Montaje", "Ctrl+Shift+T")
+_register("montage.reveal_source", "Ver el clip en la fuente (doble click en el clip)", "Montaje", "Ctrl+Shift+R")
+_register("montage.move_up", "Subir el clip a la pista de encima", "Montaje", "Ctrl+Shift+Up")
+_register("montage.move_down", "Bajar el clip a la pista de abajo", "Montaje", "Ctrl+Shift+Down")
+_register("montage.export", "Exportar montaje…", "Montaje")
 
 _register("marks.point", "Marca puntual", "Marcas", "M")
 _register("marks.in", "IN de región", "Marcas", "I")

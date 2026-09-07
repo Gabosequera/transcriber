@@ -18,6 +18,7 @@ from test_projects import fixture
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--hold", action="store_true")
+    parser.add_argument("--screenshot", help="guarda una captura del modo Montaje en esta ruta (PNG)")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1] / "media" / "smoke-modular" / uuid.uuid4().hex[:8]
     root.mkdir(parents=True, exist_ok=True)
@@ -764,6 +765,81 @@ def main():
         ed._set_playhead(3.5); assert ed.ejecutar("loop.set_in") and ed.loop[0] == 3.5
         ed._set_playhead(6.0); assert ed.ejecutar("loop.set_out") and ed.loop == (3.5, 6.0)
         assert ed.ejecutar("loop.clear") and ed.loop is None
+        # ---- Fase D: montaje (plan §7): clips, pistas V1/V2, preview clip a clip, deshacer ----
+        import editorial_montaje
+        montage = workspace.montage
+        assert montage.mode == "source" and montage.doc is None
+        controller.clear_selection(); controller.leave()
+        ed._set_loop(1.0, 3.0)                                   # Ctrl+Shift+A toma el rango a repetir
+        assert ed.ejecutar("montage.add_selection") and len(montage.doc["clips"]) == 1
+        ed._clear_loop()
+        montage.add_range(4.0, 6.0, label="dos")
+        montage.add_range(6.5, 8.0, label="tres")
+        assert (views / "montaje.json").is_file() and len(montage.doc["clips"]) == 3
+        app.update()
+        assert workspace.montage_box.winfo_ismapped() and workspace.montage_export_button.cget("state") == "normal"
+        assert "3 clips" in workspace.montage_status.cget("text")
+        assert ed.ejecutar("view.mode_montage") and montage.mode == "montage"
+        app.update()
+        assert workspace.mode_bar.get() == "Montaje" and abs(ed._dur() - 5.5) < 1e-6, ed._dur()
+        names = [c["nombre"] for c in ed._carriles()]
+        assert names == ["montage:V2", "montage:V1", "montage:topics"], names
+        ed._fit(); app.update(); g = ed._tl_geo()
+        assert all(k in montage._lane_y for k in ("V1", "V2"))
+        # arrastrar el segundo clip hacia ARRIBA: cae en V2 (sobre el tercero); V1 cierra el hueco
+        y1, y2 = montage._lane_y["V1"] + 17, montage._lane_y["V2"] + 17
+        clip2 = montage.doc["clips"][1]
+        xa = ed._t2x(clip2["seq_ini"] + 1.0, g)
+        for phase, x, y in (("press", xa, y1), ("motion", xa - 3, y1), ("motion", ed._t2x(4.0, g), y2),
+                            ("release", ed._t2x(4.0, g), y2)):
+            montage.gesture("V1", phase, NS(x=x, y=y, state=0), g, montage._lane_y["V1"])
+        moved = next(c for c in montage.doc["clips"] if c["clip_id"] == clip2["clip_id"])
+        assert moved["track_id"] == "V2" and abs(moved["seq_ini"] - 3.0) < .05, moved
+        v1 = [(c["label"], c["seq_ini"]) for c in editorial_montaje.track_clips(montage.doc, "V1")]
+        assert v1 == [("rango", 0.0), ("tres", 2.0)], v1
+        assert editorial_montaje.track_ids(montage.doc) == ["V1", "V2", "V3"]
+        pieces = editorial_montaje.flatten(montage.doc)
+        assert [p["clip_id"] for p in pieces] == ["clip-000001", "clip-000003", "clip-000002"], pieces
+        assert abs(editorial_montaje.total_seconds(montage.doc) - 5.0) < 1e-6
+        assert len(controller.history) >= 4 and controller.history.peek_undo().label == "montaje: mover clip"
+        # la waveform se compone en tiempo de secuencia (mapa por píxel) y el ruler mide 5 s
+        app.update(); assert abs(ed._dur() - 5.0) < 1e-6
+        datos = ed._datos_vista(workspace.info["pistas"][0]["idx"], int(g[1]))
+        assert any(d[0] is not None for d in datos)
+        # preview clip a clip: arranca en la fuente del primer tramo y salta al siguiente
+        ed._set_playhead(1.5)
+        assert ed._piece is None
+        ed._play()
+        spin(lambda: ed.repro.position() is not None and ed._piece is not None and ed.t_play > 1.6, timeout=25)
+        assert ed._piece["clip_id"] == "clip-000001" and ed.repro.position() >= 2.5
+        spin(lambda: ed._piece is not None and ed._piece["clip_id"] == "clip-000003" and 2.0 <= ed.t_play < 3.2, timeout=30)
+        ed._stop_preview()
+        # deshacer el arrastre (Ctrl+Z) devuelve los tres clips a V1; rehacer lo repite
+        ed.tl.focus_set()
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert all(c["track_id"] == "V1" for c in montage.doc["clips"]) and editorial_montaje.track_ids(montage.doc) == ["V1", "V2"]
+        assert ed._key_toplevel(ev(ed.tl, "r", ctrl)) == "break"
+        assert next(c for c in montage.doc["clips"] if c["clip_id"] == clip2["clip_id"])["track_id"] == "V2"
+        # dividir en el playhead, X desactiva, Tab recorre, doble click revela la fuente
+        montage.select(["clip-000001"]); ed._set_playhead(1.0)
+        assert ed.ejecutar("edit.split") and len(montage.doc["clips"]) == 4
+        assert montage.selected != "clip-000001"
+        assert ed.ejecutar("edit.toggle")
+        assert next(c for c in montage.doc["clips"] if c["clip_id"] == montage.selected)["state"] == "disabled"
+        assert ed.ejecutar("edit.item_next") and montage.selected
+        montage.select(["clip-000003"])
+        assert ed.ejecutar("montage.reveal_source") and montage.mode == "source" and abs(ed.t_play - 6.5) < 1e-6
+        assert workspace.mode_bar.get() == "Fuente"
+        if args.screenshot:
+            workspace.set_mode("montage"); ed._fit(); app.update()
+            app.lift(); app.attributes("-topmost", True); app.update()
+            time.sleep(.4)
+            from PIL import ImageGrab
+            x0, y0 = app.winfo_rootx(), app.winfo_rooty()
+            ImageGrab.grab(bbox=(x0, y0, x0 + app.winfo_width(), y0 + app.winfo_height())).save(args.screenshot)
+            app.attributes("-topmost", False)
+            workspace.set_mode("source"); app.update()
+            print(f"  captura del montaje: {args.screenshot}", flush=True)
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',
