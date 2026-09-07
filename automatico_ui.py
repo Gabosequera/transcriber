@@ -58,7 +58,7 @@ class ChunkReviewDialog(ctk.CTkToplevel):
         self.editorial_master = master if master is not None else read_json(master_path)
         self.document = document if document is not None else read_json(self.root_path / "views" / "chunks.json")
         self.rows: list[dict] = []
-        self.title("Revisar chunks")
+        self.title("Revisar bloques")
         self.geometry("920x520")
         self.minsize(760, 420)
         self.configure(fg_color=BG)
@@ -267,6 +267,8 @@ class AutomaticWorkspace:
         self._last_skip: tuple[int, float] | None = None
         self._review_stale = False
         self._tt_items: list = []
+        self._worker_label = None
+        self._cycle_state = None
 
         self.f = ctk.CTkFrame(parent, fg_color=BG, corner_radius=0)
         self.f.grid_columnconfigure(0, weight=1)
@@ -418,6 +420,10 @@ class AutomaticWorkspace:
         self.log.grid(row=6, column=0, sticky="nsew", padx=14, pady=7)
         self.log.configure(state="disabled")
 
+        # ---- panel de acciones (plan-montaje-ai.md §4): de arriba abajo, en el orden
+        # real del flujo; UN botón principal para la AI con sus variantes en un
+        # desplegable y, debajo, la etiqueta con el estado del ciclo ----
+        tip = toolbar_ui.Tooltip
         actions = ctk.CTkFrame(panel, fg_color="transparent")
         actions.grid(row=7, column=0, sticky="ew", padx=14, pady=(4, 6))
         actions.grid_columnconfigure((0, 1), weight=1)
@@ -425,14 +431,20 @@ class AutomaticWorkspace:
                                          state="disabled", fg_color=SURFACE_RAISED,
                                          hover_color="#2a322d", command=self._show_conversation)
         self.view_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.chunks_button = ctk.CTkButton(actions, text="Revisar chunks", height=28,
+        tip(self.view_button, "Abre views/conversation.md: todas las pistas intercaladas con "
+                              "timecodes e IDs de intervención (solo lectura).")
+        self.chunks_button = ctk.CTkButton(actions, text="Revisar bloques", height=28,
                                            state="disabled", fg_color=SURFACE_RAISED,
                                            hover_color="#2a322d", command=self._review_chunks)
         self.chunks_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        tip(self.chunks_button, "Edita títulos y límites de los bloques propuestos por la AI "
+                                "(Tarea 1). Guardar vuelve a ajustar los bordes.")
         self.agent_button = ctk.CTkButton(panel, text="Importar JSON de la AI", height=28,
                                           state="disabled", fg_color=SURFACE_RAISED,
                                           hover_color="#2a322d", command=self._import_external_json)
         self.agent_button.grid(row=8, column=0, sticky="ew", padx=14, pady=(0, 6))
+        tip(self.agent_button, "Importa a mano un *.proposed.json de la AI. Normalmente no hace "
+                               "falta: la app detecta sola los archivos en views/ cada 2 s.")
         self._build_trims_panel(panel, row=9)
         # Formato de salida: vale para los dos botones de exportación; se recuerda.
         export_row = ctk.CTkFrame(panel, fg_color="transparent")
@@ -454,28 +466,54 @@ class AutomaticWorkspace:
                                         wraplength=max(140, self._panel_width - 48),
                                         font=ctk.CTkFont(size=10))
         self.format_help.grid(row=11, column=0, sticky="ew", padx=14, pady=(0, 6))
-        self.accept_button = ctk.CTkButton(panel, text="Aceptar y exportar cortes", height=32,
+        self.accept_button = ctk.CTkButton(panel, text="Exportar bloques", height=32,
                                            state="disabled", fg_color=ACCENT,
                                            command=self._accept_cuts)
         self.accept_button.grid(row=12, column=0, sticky="ew", padx=14, pady=(0, 6))
+        tip(self.accept_button, "Exporta un video por bloque del plan (Tarea 1), SIN aplicar "
+                                "recortes. Solo en el proyecto padre y con plan.")
         self.open_project_button = ctk.CTkButton(panel, text="Abrir proyecto existente", height=28,
                                                 fg_color=SURFACE_RAISED,
                                                 command=self._open_project)
         self.open_project_button.grid(row=13, column=0, sticky="ew", padx=14, pady=(0, 6))
+        tip(self.open_project_button, "Carga un master editorial por ruta. Al importar un video la "
+                                      "app ya busca sola su proyecto por huella del contenido.")
         self.run_button = ctk.CTkButton(panel, text="Procesar pistas de voz", height=38,
                                         state="disabled", fg_color=ACCENT,
                                         hover_color=ACCENT_HOVER, command=self._run_or_cancel,
                                         font=ctk.CTkFont(size=13, weight="bold"))
         self.run_button.grid(row=14, column=0, sticky="ew", padx=14, pady=(0, 14))
-        self.layers_button = ctk.CTkButton(panel, text="Capas y comentarios", command=self.layers.manage)
+        tip(self.run_button, "Transcribe y analiza las pistas marcadas como VOZ (Whisper, MMS, "
+                             "risa, intensidad). Reanudar retoma lo ya hecho. En un video "
+                             "recortado no hace falta: la metadata viene heredada.")
+        self.layers_button = ctk.CTkButton(panel, text="Capas…", command=self.layers.manage)
         self.layers_button.grid(row=15, column=0, sticky="ew", padx=14, pady=5)
-        ctk.CTkButton(panel, text="Preparar capas para AI", command=self._prepare_layers).grid(
-            row=16, column=0, sticky="ew", padx=14, pady=5)
-        ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
-            row=17, column=0, sticky="ew", padx=14, pady=5)
-        ctk.CTkButton(panel, text="Preparar revisión editorial (Tarea 4)", fg_color="#4a3a5e",
-                      hover_color="#5a4772", command=self._prepare_editorial).grid(
-            row=18, column=0, sticky="ew", padx=14, pady=(5, 12))
+        tip(self.layers_button, "Añade, renombra, reordena o borra carriles del timeline "
+                                "(recortes tuyos, pedidos para la AI, capas de la AI).")
+        ai_row = ctk.CTkFrame(panel, fg_color="transparent")
+        ai_row.grid(row=16, column=0, sticky="ew", padx=14, pady=(5, 2))
+        ai_row.grid_columnconfigure(0, weight=1)
+        self.ai_button = ctk.CTkButton(ai_row, text="Preparar para la AI", height=34,
+                                       fg_color="#4a3a5e", hover_color="#5a4772",
+                                       font=ctk.CTkFont(size=13, weight="bold"),
+                                       command=lambda: self._ai_option(self.AI_DEFAULT))
+        self.ai_button.grid(row=0, column=0, sticky="ew")
+        tip(self.ai_button, lambda: f"Prepara el pedido «{self.AI_OPTIONS[self.AI_DEFAULT][0]}» "
+                                    "(la opción por defecto). La flecha muestra las demás variantes. "
+                                    "Todas escriben views/layers.json y esperan la respuesta de la AI.")
+        self.ai_arrow = ctk.CTkButton(ai_row, text="▾", width=34, height=34, fg_color="#4a3a5e",
+                                      hover_color="#5a4772", font=ctk.CTkFont(size=14, weight="bold"),
+                                      command=self._ai_menu)
+        self.ai_arrow.grid(row=0, column=1, padx=(3, 0))
+        tip(self.ai_arrow, "Variantes: revisión completa, solo temas, solo recortes, "
+                           "recortes profundos, montaje por temas.")
+        self.cycle_label = ctk.CTkLabel(panel, text="Sin pedido preparado.", text_color=MUTED,
+                                        anchor="w", justify="left",
+                                        wraplength=max(140, self._panel_width - 48),
+                                        font=ctk.CTkFont(size=10))
+        self.cycle_label.grid(row=17, column=0, sticky="ew", padx=14, pady=(0, 12))
+        self._last_import_error = None
+        self._cycle_text = None
 
     def _tool_picked(self, label):
         self.layers.set_tool("cut" if label == "Corte" else "select")
@@ -525,7 +563,7 @@ class AutomaticWorkspace:
     def _apply_panel_width(self, width: int):
         self._panel_width = width
         self.panel.configure(width=width)
-        for label in (self.trims_status, self.format_help):
+        for label in (self.trims_status, self.format_help, self.cycle_label):
             label.configure(wraplength=max(140, width - 48))
 
     def _sash_leave(self, _e=None):
@@ -596,21 +634,94 @@ class AutomaticWorkspace:
                                          wraplength=max(140, self._panel_width - 48),
                                          font=ctk.CTkFont(size=10))
         self.trims_status.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
-        buttons = ctk.CTkFrame(box, fg_color="transparent")
-        buttons.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 4))
-        buttons.grid_columnconfigure((0, 1), weight=1)
-        self.review_button = ctk.CTkButton(buttons, text="Preparar revisión AI", height=26,
-                                           state="disabled", fg_color="#4a3a5e",
-                                           hover_color="#5a4772", command=self._prepare_review)
-        self.review_button.grid(row=0, column=0, sticky="ew", padx=(0, 3))
-        self.trim_export_button = ctk.CTkButton(buttons, text="✂ Cortar y exportar", height=26,
+        import toolbar_ui
+        toolbar_ui.Tooltip(self.silence_button, "Propone recortes en los huecos sin palabras ni risas "
+                           "de ninguna pista (mín = hueco mínimo, margen = silencio que se "
+                           "conserva). Nada se corta: los revisas en el carril «Recortes».")
+        self.trim_export_button = ctk.CTkButton(box, text="Exportar con recortes", height=28,
                                                 state="disabled", fg_color="#8a5a24",
                                                 hover_color="#a06a2b", command=self._export_trims)
-        self.trim_export_button.grid(row=0, column=1, sticky="ew", padx=(3, 0))
+        self.trim_export_button.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 4))
+        toolbar_ui.Tooltip(self.trim_export_button, "Aplica los recortes activos y crea un video "
+                           "nuevo con su proyecto hijo (temas y capas heredados). El original "
+                           "no se toca.")
         self.skip_check = ctk.CTkCheckBox(box, text="Saltar recortes al reproducir", height=20,
                                           checkbox_width=14, checkbox_height=14,
                                           text_color="#c6cec9", font=ctk.CTkFont(size=10))
         self.skip_check.grid(row=4, column=0, sticky="w", padx=10, pady=(0, 6))
+        toolbar_ui.Tooltip(self.skip_check, "Al reproducir, salta los tramos recortados activos "
+                           "(re-arranca la sesión al final de cada uno). Ayuda de revisión, "
+                           "no el render.")
+
+    # ---- botón principal de la AI y estado del ciclo (plan §4) ----
+    AI_DEFAULT = "full"
+    AI_OPTIONS = {
+        "full": ("Revisión completa (temas + recortes)", "_prepare_editorial"),
+        "topics": ("Solo temas", "_prepare_topics"),
+        "trims": ("Solo recortes", "_prepare_review"),
+    }
+
+    def _ai_menu(self):
+        """La flecha del botón principal: las variantes de «Preparar para la AI»."""
+        import tkinter as tk
+        menu = tk.Menu(self.f, tearoff=False)
+        for key, (label, _) in self.AI_OPTIONS.items():
+            menu.add_command(label=label + ("   (por defecto)" if key == self.AI_DEFAULT else ""),
+                             command=lambda k=key: self._ai_option(k))
+        x = self.ai_button.winfo_rootx()
+        y = self.ai_button.winfo_rooty() + self.ai_button.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _ai_option(self, key):
+        if self.worker and self.worker.is_alive():
+            self._append_log("Espera a que termine la operación en curso.")
+            return
+        label, handler = self.AI_OPTIONS[key]
+        self._append_log(f"Preparar para la AI → {label}")
+        getattr(self, handler)()
+
+    def _is_child(self) -> bool:
+        store = self.layers.store
+        return bool(store and store.master.get("derivation"))
+
+    def _refresh_child_mode(self):
+        """En un proyecto hijo (video ya recortado) «Procesar pistas» y «Exportar
+        bloques» no hacen nada: se OCULTAN. El botón de procesar vuelve a verse solo
+        mientras hay un trabajo en curso, porque ahí es el botón «Cancelar»."""
+        child = self._is_child()
+        busy = bool(self.worker and self.worker.is_alive())
+        for button in (self.run_button, self.accept_button):
+            if child and not (busy and button is self.run_button):
+                button.grid_remove()
+            else:
+                button.grid()
+
+    def _refresh_cycle_label(self):
+        """Etiqueta bajo el botón principal: en qué punto del ciclo con la AI estamos
+        (`editorial_cycle.status`, puro). Barata: se llama en cada sondeo."""
+        master = self._master_path()
+        if not master or not self.result:
+            text = "Sin pedido preparado."
+        else:
+            import editorial_cycle
+            digest = None
+            if self.layers.store:
+                try:
+                    digest = editorial_layers.snapshot_value(
+                        self.layers.store.master, self.layers.all(),
+                        master_digest=self.layers.store.source_digest)["source_layers_digest"]
+                except Exception:
+                    digest = None
+            state = editorial_cycle.status(master.parent / "views", layers_digest=digest,
+                                           last_error=self._last_import_error)
+            text = state["text"]
+            self._cycle_state = state
+        if text != self._cycle_text:
+            self._cycle_text = text
+            self.cycle_label.configure(text=text, text_color="#e6b85c" if "viejo" in text else MUTED)
 
     def set_default_model(self, value: str):
         """Sigue al modelo por defecto de Ajustes (sin tocar una corrida en curso)."""
@@ -682,8 +793,11 @@ class AutomaticWorkspace:
         self.pipeline_title.configure(text="Selecciona las pistas de voz")
         self.run_button.configure(state="normal")
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
-                       self.silence_button, self.review_button, self.trim_export_button):
+                       self.silence_button, self.trim_export_button, self.ai_button, self.ai_arrow):
             button.configure(state="disabled")
+        self._last_import_error = None
+        self._refresh_child_mode()
+        self._refresh_cycle_label()
         generation = self.editor._gen
         def discover():
             import editorial_catalog
@@ -713,17 +827,18 @@ class AutomaticWorkspace:
         for check in self.step_checks.values():
             check.configure(state=state)
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
-                       self.silence_button, self.review_button, self.trim_export_button):
+                       self.silence_button, self.trim_export_button, self.ai_button, self.ai_arrow):
             button.configure(state="disabled")
         if not active:
             self._refresh_plan_buttons()
         for widget in self.track_widgets:
             widget["selected"].configure(state=state)
             widget["label"].configure(state=state)
+        self._refresh_child_mode()
 
     def _background_done(self):
         self._set_processing(False)
-        self.run_button.configure(text="Reanudar / actualizar", state="normal")
+        self.run_button.configure(text="Reanudar", state="normal")
 
     def _run_or_cancel(self):
         if self.worker and self.worker.is_alive():
@@ -831,7 +946,7 @@ class AutomaticWorkspace:
                                       else "FALLBACK LOCAL" if planner == "local-fallback/1"
                                       else planner.upper())
                     self.project_status.configure(text=f"AUTOMÁTICO · {planner_status}")
-                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self.run_button.configure(text="Reanudar", state="normal")
                     self._load_saved_plan()
                     self._refresh_plan_buttons()
                     self._load_trims_async()
@@ -861,25 +976,32 @@ class AutomaticWorkspace:
                         self.layers.lane_order = editorial_layers.load_lane_order(event["store"].root)
                         self.layers.history.clear()          # historial por medio cargado
                         self.editor.refrescar_layout()
+                        self._refresh_child_mode()
+                        self._refresh_cycle_label()
                 elif kind == "layers_imported":
+                    self._last_import_error = None
                     self._background_done()
                     self._record_layers(event.get("before") or {}, "importar propuesta de capa")
                     self.layers.snapshot()
                     self.editor.refrescar_layout()
                     self._append_log("Propuesta de capa importada; revisa sus tramos en el timeline.")
                 elif kind == "topics_imported":
+                    self._last_import_error = None
                     self._background_done()
                     if event.get("pass") == 2:
                         self._record_layers(event.get("before") or {}, "importar temas de la AI")
                     self.editor.refrescar_layout()
                     self._append_log(event["message"])
+                    self._refresh_cycle_label()
                 elif kind == "review_written":
                     self._review_stale = False
                     self._background_done()
                     self._refresh_trims_status()
                     self._append_log("Revisión para la AI lista: " + str(event["request"]))
-                    self._append_log("Pide a la AI la Tarea 2 de la skill transcriptor; su "
+                    self._append_log(event.get("hint") or
+                                     "Pide a la AI la Tarea 2 de la skill transcriptor; su "
                                      "trims.proposed.json se importa solo al aparecer.")
+                    self._refresh_cycle_label()
                 elif kind == "export_done":
                     self._background_done()
                     self.progress.set(1)
@@ -901,11 +1023,15 @@ class AutomaticWorkspace:
                     self.output_entry.delete(0, "end")
                     self.output_entry.insert(0, str(Path(self.result["master"]).parent.parent))
                     self.editor.refrescar_layout()
-                    self.run_button.configure(text="Reanudar / actualizar", state="normal")
+                    self.run_button.configure(text="Reanudar", state="normal")
                     self._load_trims_async()
                     self._refresh_plan_buttons()
                     self.pipeline_title.configure(text="Proyecto detectado y cargado")
                     self._append_log("Metadata recuperada sin inferencia: " + str(self.result['master']))
+                    if event.get("derived"):
+                        self._append_log("Video recortado (proyecto hijo): la metadata y las capas "
+                                         "vienen del padre; «Procesar pistas» y «Exportar bloques» "
+                                         "no aplican aquí.")
                 elif kind == "discovered":
                     if event["generation"] != self.editor._gen or self.result:
                         continue
@@ -921,6 +1047,9 @@ class AutomaticWorkspace:
                     self.pipeline_title.configure(text="Cancelado" if cancelled else "Error")
                     self.run_button.configure(text="Reanudar", state="normal")
                     self._append_log(("Cancelado: " if cancelled else "ERROR: ") + event["error"])
+                    if not cancelled and str(self._worker_label or "").startswith("import"):
+                        self._last_import_error = event["error"]
+                    self._refresh_cycle_label()
         except queue.Empty:
             pass
         self._poll_counter += 1
@@ -934,20 +1063,32 @@ class AutomaticWorkspace:
                                 self._import_trims)
             self._poll_proposal(views / "layers.proposed.json", "_last_layers_stamp", self._import_layers)
             self._poll_proposal(views / "topics.proposed.json", "_last_topics_stamp", self._import_topics)
+            self._refresh_cycle_label()
         self.f.after(100, self._pump)
 
     def _poll_proposal(self, path: Path, attribute: str, action):
         """La AI escribe su JSON fuera de la app: se importa solo cuando aparece o cambia."""
         if self.worker and self.worker.is_alive():
             return
-        try:
-            stat = path.stat()
-        except OSError:
-            return
-        stamp = (str(path), stat.st_mtime_ns, stat.st_size)
-        if stamp != getattr(self, attribute):
+        stamp = self._stamp_of(path)
+        if stamp is not None and stamp != getattr(self, attribute):
             setattr(self, attribute, stamp)
             action(path)
+
+    @staticmethod
+    def _stamp_of(path: Path):
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return None
+        return (str(path), stat.st_mtime_ns, stat.st_size)
+
+    def _mark_imported(self, path, attribute: str):
+        """Un archivo importado a mano (o por un test) no debe volver a importarse en el
+        sondeo siguiente: se sella con el mismo stamp que usa `_poll_proposal`."""
+        stamp = self._stamp_of(Path(path))
+        if stamp is not None:
+            setattr(self, attribute, stamp)
 
     def _master_path(self) -> Path | None:
         if self.result:
@@ -1013,14 +1154,18 @@ class AutomaticWorkspace:
             button.configure(state="normal" if ready and self.plan else "disabled")
         self.silence_button.configure(state="normal" if ready else "disabled")
         has_trims = ready and self.trims is not None
-        self.review_button.configure(state="normal" if has_trims else "disabled")
         enabled = editorial_trims.stats(self.trims)["enabled"] if has_trims else 0
         self.trim_export_button.configure(state="normal" if enabled else "disabled")
+        ai_ready = ready and self.layers.store is not None
+        for button in (self.ai_button, self.ai_arrow):
+            button.configure(state="normal" if ai_ready else "disabled")
+        self._refresh_cycle_label()
 
-    def _background(self, work):
+    def _background(self, work, *, label=None):
         if self.worker and self.worker.is_alive():
             return
         self.cancel = threading.Event()
+        self._worker_label = label
         self._set_processing(True)
         self.run_button.configure(text="Cancelar", state="normal")
         def guarded():
@@ -1030,10 +1175,12 @@ class AutomaticWorkspace:
                 self.events.put({"tipo": "ui_error", "error": str(error)})
         self.worker = threading.Thread(target=guarded, daemon=True)
         self.worker.start()
+        self._refresh_child_mode()             # en un hijo, «Cancelar» se ve mientras trabaja
 
     def _import_plan(self, path, *, reuse_proposal=False):
         master = self._master_path()
         if master:
+            self._mark_imported(path, "_last_plan_stamp")
             plan_before = copy.deepcopy(self.plan)
             self.plan = None
             self.editor.refrescar_layout()
@@ -1041,10 +1188,10 @@ class AutomaticWorkspace:
                 plan = editorial_pipeline.apply_agent_chunks(master, path, reuse_proposal=reuse_proposal)
                 self.events.put({"tipo": "plan_loaded", "plan": plan, "history": "importar bloques",
                                  "plan_before": plan_before})
-            self._background(work)
+            self._background(work, label="import:plan")
 
     def _plan_reviewed(self):
-        """«Revisar chunks» guardó el plan: recargarlo y registrarlo en el historial."""
+        """«Revisar bloques» guardó el plan: recargarlo y registrarlo en el historial."""
         before = copy.deepcopy(self.plan)
         self._load_saved_plan()
         after = self.plan
@@ -1098,10 +1245,10 @@ class AutomaticWorkspace:
             saved = Path(path).parent / "views" / "chunks.json"
             plan = editorial_chunks.validate_plan(read_json(saved), master) if saved.is_file() else None
             self.events.put({"tipo": "project_loaded", "plan": plan,
-                             "generation":generation,
+                             "generation":generation, "derived": bool(master.get("derivation")),
                              "tracks": list(master["tracks"].values()),
                              "result": {"master": path, "source": source, "chunk_planner": "external"}})
-        self._background(work)
+        self._background(work, label="load:project")
 
     def _accept_cuts(self):
         if not self.plan or not self.info:
@@ -1168,11 +1315,21 @@ class AutomaticWorkspace:
         master = self._master_path()
         if not master or event.get("master") != str(master):
             return                             # llegó tarde: ya se abrió otro proyecto
+        incoming = event["doc"]
+        if (self.trims is not None and self.trims_path == Path(event["path"])
+                and int(incoming.get("revision") or 0) < int(self.trims.get("revision") or 0)):
+            # El worker leyó el documento y el timeline lo editó ANTES de que este evento
+            # se procesara (la cola se vacía cada 100 ms): el vivo es más nuevo, no se pisa.
+            if not event.get("quiet"):
+                self._background_done()
+            return
         trims_before = event.get("trims_before")
-        self.trims = event["doc"]
+        self.trims = incoming
         if event.get("history") and trims_before is not None:
             self.layers.history.record(event["history"], {"trims": trims_before}, {"trims": self.trims},
                                        {"trims": self.layers._doc_revision("trims")})
+        if str(event.get("history") or "").startswith("importar"):
+            self._last_import_error = None
         self.trims_path = Path(event["path"])
         if event.get("index") is not None:
             self._boundary_index = event["index"]
@@ -1290,6 +1447,7 @@ class AutomaticWorkspace:
         master = self._master_path()
         if not master:
             return
+        self._mark_imported(path, "_last_trims_stamp")
         trims_path = master.parent / "views" / "trims.json"
         plan = self.plan
 
@@ -1309,21 +1467,24 @@ class AutomaticWorkspace:
                                          f"{len(proposal['cuts'])} recortes de contenido"
                                          + (f", {flagged} con avisos" if flagged else "")
                                          + ". Aparecen en violeta; revísalos antes de cortar.")})
-        self._background(work)
+        self._background(work, label="import:trims")
 
     def _prepare_review(self):
+        """«Preparar para la AI → Solo recortes»: el paquete de la Tarea 2."""
         master = self._master_path()
         if not master or self.trims is None:
+            self._append_log("Para pedir recortes hace falta la metadata y el documento de recortes "
+                             "(Analizar silencios lo crea).")
             return
         plan, document = self.plan, self.trims
-        if self.layers.store:
-            self.layers.snapshot()
+        digest = self.layers.snapshot()["source_layers_digest"] if self.layers.store else None
 
         def work():
             data = read_json(master)
-            paths = editorial_trims.write_review_package(master.parent, data, plan, document)
+            paths = editorial_trims.write_review_package(master.parent, data, plan, document,
+                                                         layers_digest=digest)
             self.events.put({"tipo": "review_written", "request": paths["request"]})
-        self._background(work)
+        self._background(work, label="prepare:trims")
 
     def _export_trims(self):
         if not self.info or self.trims is None:
@@ -1361,15 +1522,10 @@ class AutomaticWorkspace:
     def _cut_lanes(self):
         return self.layers.lanes()
 
-    def _prepare_layers(self):
-        if self.layers.store:
-            self.layers.snapshot()
-            self._append_log("Capas para AI: " + str(self.layers.store.root / "views" / "layers.json"))
-
     def _import_layers(self, path):
         if not self.layers.store:
             return
-        import editorial_layers
+        self._mark_imported(path, "_last_layers_stamp")
         snapshot = self.layers.snapshot()
         proposal = read_json(path)
         ids = [layer.get("layer_id") for layer in
@@ -1379,9 +1535,10 @@ class AutomaticWorkspace:
         def work():
             editorial_layers.merge_response(self.layers.store, proposal, snapshot)
             self.events.put({"tipo": "layers_imported", "before": before})
-        self._background(work)
+        self._background(work, label="import:layers")
 
     def _prepare_topics(self):
+        """«Preparar para la AI → Solo temas»: Tarea 3 (ámbito = bloque seleccionado)."""
         if not self.layers.store or not self._master_path():
             self._append_log("Para analizar temas, abre o genera primero la metadata del medio.")
             return
@@ -1396,13 +1553,18 @@ class AutomaticWorkspace:
         self._append_log("Tarea 3 lista: views/topics-agent-request.md. "
                          + ("Ámbito: bloque seleccionado." if scope else "Ámbito: medio completo.")
                          + " Pide a la AI ambas pasadas; la app valida el mapa entre ellas.")
+        self._refresh_cycle_label()
 
     def _prepare_editorial(self):
-        """Un solo pedido a la AI (§9): temas (pasada 1) + paquete de revisión de
-        recortes + views/editorial-agent-request.md con el orden de la Tarea 4."""
+        """«Preparar para la AI» (por defecto): temas (pasada 1) + paquete de revisión
+        de recortes + views/editorial-agent-request.md con el orden de la Tarea 4."""
         master = self._master_path()
-        if not self.layers.store or not master or self.trims is None:
-            self._append_log("Para preparar la revisión editorial hace falta la metadata y los recortes.")
+        if not self.layers.store or not master:
+            self._append_log("Para preparar la revisión hace falta la metadata del medio.")
+            return
+        if self.trims is None:
+            self._append_log("Todavía no hay documento de recortes: pulsa Analizar silencios primero "
+                             "(o usa «Solo temas»).")
             return
         import editorial_topics
         snapshot = self.layers.snapshot()
@@ -1410,19 +1572,23 @@ class AutomaticWorkspace:
         request = editorial_topics.prepare(root, self.layers.store.master, snapshot)
         self._last_topics_stamp = None
         plan, document = self.plan, self.trims
+        digest = snapshot["source_layers_digest"]
 
         def work():
             data = read_json(master)
-            paths = editorial_trims.write_review_package(root, data, plan, document)
+            editorial_trims.write_review_package(root, data, plan, document, layers_digest=digest)
             path = editorial_trims.write_editorial_request(root, data, plan, document, request)
-            self.events.put({"tipo": "review_written", "request": path})
+            self.events.put({"tipo": "review_written", "request": path,
+                             "hint": "Pide a la AI la Tarea 4 de la skill transcriptor (temas en dos "
+                                     "pasadas y después recortes); cada respuesta se importa sola."})
         self._review_stale = False
-        self._background(work)
+        self._background(work, label="prepare:editorial")
 
     def _import_topics(self, path):
         if not self.layers.store:
             return
         import editorial_topics
+        self._mark_imported(path, "_last_topics_stamp")
         snapshot = self.layers.snapshot()
         store = self.layers.store
         before = {}
@@ -1435,7 +1601,7 @@ class AutomaticWorkspace:
         def work():
             result = editorial_topics.import_proposal(store, read_json(path), snapshot)
             self.events.put({"tipo":"topics_imported", "before": before, **result})
-        self._background(work)
+        self._background(work, label="import:topics")
 
     def _on_playhead(self, t: float):
         """Reproducción con «saltar recortes»: al entrar en un recorte activo se re-arranca la

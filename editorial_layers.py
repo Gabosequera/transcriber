@@ -343,10 +343,18 @@ def cut_state(cut: dict) -> str:
     return "accepted" if cut.get("accepted") else "proposed"
 
 
-def write_snapshot(root, master, layers, *, master_digest=None):
+def snapshot_value(master, layers, *, master_digest=None):
+    """La foto de capas que lee la AI (`views/layers.json`) con su
+    `source_layers_digest`, SIN escribirla: la etiqueta de estado del ciclo la
+    compara con el digest del pedido vigente para avisar «pedido viejo»."""
     value = {"schema": "editorial-layers-view/1", "source_master_digest": master_digest or source_master_digest(master),
              "layers": layers}
     value["source_layers_digest"] = digest_json(value)
+    return value
+
+
+def write_snapshot(root, master, layers, *, master_digest=None):
+    value = snapshot_value(master, layers, master_digest=master_digest)
     atomic_write_json(Path(root) / "views" / "layers.json", value)
     return value
 

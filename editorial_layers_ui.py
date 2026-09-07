@@ -1217,7 +1217,7 @@ class LayersController:
             self.w._refresh_trims_status()
         elif lid == "bloques":
             if create or delete or item["state"] == "disabled":
-                raise ValueError("los bloques deben cubrir el medio; usa Revisar chunks para dividir el plan")
+                raise ValueError("los bloques deben cubrir el medio; usa Revisar bloques para dividir el plan")
             plan = copy.deepcopy(self.w.plan)
             index = next(i for i,c in enumerate(plan["chunks"]) if c["chunk_id"] == item["item_id"])
             chunk = plan["chunks"][index]

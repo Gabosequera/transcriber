@@ -151,6 +151,7 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
 | pipeline.py | orquestador DAG transaccional con resume |
 | editorial_trims.py | RECORTES: heurística de huecos sin voz (+ actividad RMS por pista), documento `views/trims.json`, validación/merge de `trims.proposed.json` de la AI, paquete de revisión por bloque, unión de intervalos y segmentos conservados |
 | podcast_export.py | exportación de bloques (plan) y de bloques recortados (`trim`/`atrim` + `concat` por script de filtros; sondea `-/filter_complex` vs `-filter_complex_script`) |
+| editorial_cycle.py | estado del ciclo con la AI leído de `views/` (pedido vigente, pasadas validadas, propuesta importada, «pedido viejo» por digest de capas, último error); puro, alimenta la etiqueta del panel |
 | medios.py | ffprobe/fingerprint/FLAC/waveform/frames/Job Object + reproductor del preview (§3.1) |
 | hardware.py | config global (config.json) + detección CPU/GPU/hilos |
 | audiocache.py / jobs.py / models.py | caché de audio, lock de jobs, unload de modelos |
@@ -535,16 +536,35 @@ que comparte borde con el padre debe seguirlo (se localiza el rango padre por su
 bordes `proposed` y el borde huérfano apunta al borde ajustado del padre). Pendiente:
 completar el ciclo (pasada 2 y recortes) con la app reinstalada en 0.3.5.
 
-### Siguiente etapa — plan en [plan-montaje-ai.md](plan-montaje-ai.md)
+### Montaje por temas con la AI — plan en [plan-montaje-ai.md](plan-montaje-ai.md)
 
-Seis fases para otro agente: A panel derecho con un solo «Preparar para la AI ▾» y
-estado del ciclo visible (incluido «el pedido quedó viejo» cuando se edita durante el
-análisis); B Tarea 2 «modo profundo» con lane `ai-deep`; C el hijo exportado hereda
+Seis fases: A panel derecho con un solo «Preparar para la AI ▾» y estado del ciclo
+visible; B Tarea 2 «modo profundo» con lane `ai-deep`; C el hijo exportado hereda
 temas y capas por `map_range` y «Abrir el video recortado»; D timeline de montaje
 (`views/montaje.json`, clips, pistas de video V1/V2…, preview por re-sesión,
 `export_montage`); E Tarea 5 «Montaje por temas» (pedido, transcript con temas
-intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve. Los
-textos de skill de B y E están redactados en el plan.
+intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
+
+- **Fase A (hecha, 0.3.6)** — panel reordenado en el orden del flujo; `Preparar para
+  la AI` + flecha (`tk.Menu` con las variantes; click = «Revisión completa» =
+  `_prepare_editorial`); «Preparar capas para AI» eliminado (`views/layers.json` se
+  escribe en `_after_write` y en cada Preparar); «Preparar revisión AI» pasa al
+  desplegable como «Solo recortes»; `Exportar con recortes`, `Exportar bloques`,
+  `Revisar bloques`, `Capas…`, `Reanudar`. `_refresh_child_mode()` OCULTA
+  (`grid_remove`) «Procesar pistas» y «Exportar bloques» en un hijo y muestra el
+  primero como «Cancelar» solo mientras hay worker vivo. Etiqueta `cycle_label` =
+  `editorial_cycle.status(views, layers_digest, last_error)`: `layers_digest` sale de
+  `editorial_layers.snapshot_value` (la foto sin escribirla) y el pedido de recortes
+  lleva ahora `source_layers_digest:` en `trim-agent-request.md`; el último error de
+  importación (`_worker_label` que empieza por `import`) se muestra hasta el import
+  válido siguiente; se refresca en `_refresh_plan_buttons` (= tras cada escritura del
+  timeline), tras cada import y en el sondeo de 2 s. Tooltips en todos los botones.
+  Dos arreglos de paso: una importación a mano sella el stamp del archivo
+  (`_mark_imported`) para que el sondeo no lo reimporte (antes producía un «pasada
+  fuera de orden» espurio), y `_on_trims_loaded` descarta un documento con revisión
+  menor que el vivo (el worker lo había leído antes de una edición del timeline);
+  `podcast_export` reintenta el `os.rename` final ante un `PermissionError`
+  transitorio de Windows.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
@@ -672,9 +692,10 @@ simulados:
   (naranja), doble click y `X` activan/desactivan, `Supr` borra, `Esc` deselecciona,
   hover = tooltip, click derecho = menú (activar, borrar, ir al inicio/final, escuchar
   desde 2 s antes, crear 1 s). Cada mutación persiste `trims.json` (atómico). Panel
-  RECORTES: «Analizar silencios» (mín/margen), estado, «Preparar revisión AI», «✂ Cortar
-  y exportar», «Saltar recortes al reproducir» (re-arranca la sesión al final del recorte
-  activo; ayuda de revisión, no el render). `Importar JSON de la AI` enruta por `schema`;
+  RECORTES: «Analizar silencios» (mín/margen), estado, «Preparar revisión AI» (desde
+  0.3.6 vive en «Preparar para la AI ▾ → Solo recortes»), «✂ Cortar y exportar» (hoy
+  «Exportar con recortes»), «Saltar recortes al reproducir» (re-arranca la sesión al
+  final del recorte activo; ayuda de revisión, no el render). `Importar JSON de la AI` enruta por `schema`;
   el poll de 2 s también detecta `trims.proposed.json`. Los recortes se cargan al terminar
   la corrida o al abrir proyecto (hilo silencioso: valida identidad + arma el índice).
 - **Skill `skills/transcriptor/SKILL.md`**: Tarea 1 (bloques; ahora pide `topics`/

@@ -94,7 +94,20 @@ def main():
             assert not any(l['layer_id']==layer['layer_id'] for l in controller.all())
             if hasattr(workspace, '_prepare_topics'):
                 controller.selected=None
+                # ---- Fase A: un solo botón «Preparar para la AI» y la etiqueta del ciclo ----
+                assert workspace.ai_button.cget("state") == "normal"
+                assert workspace.run_button.winfo_ismapped() and workspace.accept_button.winfo_ismapped()
+                workspace._ai_option("topics")                  # = «Solo temas» del desplegable
+                app.update()
+                assert workspace.cycle_label.cget("text").startswith("Pedido de temas listo"), workspace.cycle_label.cget("text")
+                # editar una capa después de preparar → «el pedido quedó viejo»
+                stale_item = controller.persist('trims:main', layers.new_item(5, 6, comment="edición tardía"), create=True)
+                app.update()
+                assert "quedó viejo" in workspace.cycle_label.cget("text"), workspace.cycle_label.cget("text")
+                controller.persist('trims:main', stale_item, delete=True)
                 workspace._prepare_topics()
+                app.update()
+                assert workspace.cycle_label.cget("text").startswith("Pedido de temas listo")
                 request=editorial_io.read_json(store.root/'views/topics-request.json')
                 first=dict(schema='editorial-topics-proposal/1',request_id=request['request_id'],
                     source_master_digest=request['source_master_digest'],source_layers_digest=request['source_layers_digest'],
@@ -114,6 +127,8 @@ def main():
                 topic=next(l for l in store.visible() if l['kind']=='topics')
                 assert len(topic['items'][0]['ranges'])==2
                 spin(lambda: not workspace.worker.is_alive())
+                app.update()
+                assert workspace.cycle_label.cget("text").startswith("Capa de temas creada"), workspace.cycle_label.cget("text")
                 topic['items'][0]['comment']='Recurrencia revisada a mano'
                 controller.persist(topic['layer_id'],topic['items'][0])
                 assert layers.LayerStore(store.root,data).layers[topic['layer_id']]['items'][0]['edited']
@@ -130,9 +145,16 @@ def main():
             child_data=workspace.layers.store.master
             assert child_data['tracks']['B']['words'][-1]['t_ini']==4
             assert all(w['text']!='eliminado' for t in child_data['tracks'].values() for w in t['words'])
+            app.update()
+            # Fase A: en un hijo no se ven «Procesar pistas» ni «Exportar bloques»
+            assert not workspace.run_button.winfo_ismapped() and not workspace.accept_button.winfo_ismapped()
             workspace._analyze_silences()
+            spin(lambda: workspace.worker.is_alive())
+            app.update()
+            assert workspace.run_button.winfo_ismapped() and workspace.run_button.cget("text") == "Cancelar"
             spin(lambda: not workspace.worker.is_alive() and workspace.view_button.cget('state')=='normal')
             app.update()
+            assert not workspace.run_button.winfo_ismapped()
             assert (Path(workspace.result['master']).parent/'tracks/A/audio.flac').is_file()
         nav=min(8,workspace.info['duracion']-1)
         workspace.editor._set_playhead(nav)

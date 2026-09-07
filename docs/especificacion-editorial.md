@@ -464,13 +464,16 @@ quitarían del video. Reglas vigentes:
 3. **El humano manda desde el timeline.** Carril «recortes» con selección, arrastre de
    cuerpo y bordes, creación a mano, activar/desactivar, borrar, tooltip y menú. Volver a
    analizar respeta lo editado y lo desactivado.
-4. **Segunda pasada de la AI.** `Preparar revisión AI` genera `trim-agent-request.md` y
-   `trim-review.md` por bloque (conversación con los recortes ya marcados y la
-   clasificación de temas/subtemas). La AI devuelve `trims.proposed.json`
-   (`editorial-trims-proposal/1`); la app valida identidad, referencias y ajusta bordes
-   (≤ 1,5 s) para no partir palabras ni risas. Criterio: aporte a la conversación; nunca
-   recortar por humor fuerte, lisuras o comentarios ofensivos (post).
-5. **Solo «Cortar y exportar» edita.** Cada bloque sale con los segmentos conservados
+4. **Segunda pasada de la AI.** `Preparar para la AI ▾` (un solo botón con variantes:
+   revisión completa por defecto, solo temas, solo recortes, recortes profundos, montaje
+   por temas) genera `trim-agent-request.md` y `trim-review.md` por bloque (conversación
+   con los recortes ya marcados y la clasificación de temas/subtemas). La AI devuelve
+   `trims.proposed.json` (`editorial-trims-proposal/1`); la app valida identidad,
+   referencias y ajusta bordes (≤ 1,5 s) para no partir palabras ni risas. Criterio:
+   aporte a la conversación; nunca recortar por humor fuerte, lisuras o comentarios
+   ofensivos (post). El panel muestra en qué punto del ciclo está el pedido y avisa
+   «pedido viejo» si se editan capas o recortes antes de que la AI responda.
+5. **Solo «Exportar con recortes» edita.** Cada bloque sale con los segmentos conservados
    concatenados (`trim`/`atrim` + `concat`), todas las pistas y sus offsets, precisión de
    fotograma, sin deriva A/V; el original no se toca.
 

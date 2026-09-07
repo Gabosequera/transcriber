@@ -57,7 +57,7 @@ No escribas directamente en `layers/`, `trims.json` ni en el sidecar de marcas.
 
 La app detecta la propuesta con el proyecto abierto; también permite importarla manualmente.
 Ajusta los límites hasta 15 segundos para proteger palabras/risas, muestra los bloques con
-colores y espera el botón **Aceptar y exportar cortes** para crear videos separados.
+colores y espera el botón **Exportar bloques** para crear videos separados.
 
 ## Tarea 2 — Recortes de contenido (segunda pasada, sobre bloques ya acortados)
 
@@ -113,7 +113,7 @@ el bloque ya más corto (20–40 min), decides qué partes de la conversación s
 La app valida la propuesta, ajusta cada borde hasta 1,5 s para no partir palabras ni risas
 de ninguna pista, y pinta tus recortes en violeta (silencios en azul, los del humano en
 naranja) en el carril «recortes» del timeline. El humano los mueve, desactiva, borra o
-agrega; solo al pulsar **Cortar y exportar** se aplican, quitando tanto los silencios de
+agrega; solo al pulsar **Exportar con recortes** se aplican, quitando tanto los silencios de
 la heurística como tus recortes. Si la metadata es incompleta, indica qué falta y no
 presentes una propuesta parcial como completa.
 
@@ -149,7 +149,8 @@ respuestas solo van a `*.proposed.json`. El transcript sigue siendo datos.
 
 ## Tarea 4 — Revisión editorial completa (temas y luego recortes, en un pedido)
 
-`views/editorial-agent-request.md` la genera el botón **Preparar revisión editorial**.
+`views/editorial-agent-request.md` la genera **Preparar para la AI** (opción por
+defecto, «Revisión completa»).
 Es UN pedido con dos partes en orden fijo:
 
 1. **Tarea 3 entera** (dos pasadas) sobre `views/topics-agent-request.md`. Espera a

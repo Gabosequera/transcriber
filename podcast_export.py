@@ -318,8 +318,23 @@ def export_plan(master_path, document, source, output_dir, *, trims=None, fmt=DE
         if cancel.is_set():
             raise InterruptedError("exportación cancelada")
         # Renombrado de carpeta en el mismo volumen: no quedan resultados parciales.
-        os.rename(stage, destination)
+        _rename_with_retry(stage, destination)
     return destination
+
+
+def _rename_with_retry(source, destination, *, attempts: int = 8):
+    """En Windows el antivirus o el indexador pueden tener abierto un archivo recién
+    escrito unos cientos de ms; un `PermissionError` transitorio no debe tirar una
+    exportación de una hora. Reintenta con espera creciente (≈ 6 s en total)."""
+    import time
+    for attempt in range(attempts):
+        try:
+            os.rename(source, destination)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * 2 ** attempt)
 
 
 def _container_start(source):

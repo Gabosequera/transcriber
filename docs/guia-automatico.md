@@ -24,6 +24,47 @@ decide en el timeline; el video se corta solo al pulsar exportar**.
 - **Identidad por contenido.** Los proyectos se reconocen por fingerprint del medio, no por
   ruta: mover o copiar el video no rompe nada.
 
+## El panel derecho, de arriba abajo
+
+Debajo de la consola (el registro de lo que pasa) están los botones, en el orden en que
+se usan:
+
+| Botón | Qué hace | Cuándo |
+|---|---|---|
+| **Conversación** · **Revisar bloques** | Vistas de lectura: el transcript global; los bloques (títulos y límites) | Con la metadata lista |
+| **Importar JSON de la AI** | Importa a mano un `*.proposed.json` | Casi nunca: la app los detecta sola cada 2 s |
+| RECORTES → **Analizar silencios** (mín, margen) | Propone recortes en los huecos sin voz; nada se corta | Antes de pedirle nada a la AI |
+| RECORTES → **Exportar con recortes** | Aplica los recortes activos y crea un video nuevo con su proyecto hijo | Cuando el carril «Recortes» está revisado |
+| RECORTES → **Saltar recortes al reproducir** | Ayuda de revisión: la reproducción salta lo recortado | Al revisar |
+| **Salida** | Formato de los dos botones de exportación | — |
+| **Exportar bloques** | Un video por bloque, sin recortes | Solo en el padre y con plan de bloques |
+| **Abrir proyecto existente** | Carga un master por ruta | Si la app no encontró sola el proyecto |
+| **Procesar pistas de voz** / **Reanudar** | Transcripción y señales por pista | Una vez por video original |
+| **Capas…** | Añadir, renombrar, reordenar o borrar carriles | Cuando haga falta |
+| **Preparar para la AI ▾** | El único botón para la AI. Click = la opción por defecto (*Revisión completa: temas + recortes*). La flecha muestra las variantes: *Solo temas*, *Solo recortes*, *Recortes profundos*, *Montaje por temas* | Cada vez que quieras una pasada de la AI |
+
+En un **video recortado** (proyecto hijo, el que crea «Exportar con recortes») no se ven
+**Procesar pistas de voz** ni **Exportar bloques**: la metadata viene heredada del padre
+y ahí no hacen nada. Mientras hay un trabajo en curso, el botón de procesar aparece como
+**Cancelar**.
+
+**El estado del ciclo con la AI** se lee en la línea que hay justo debajo de «Preparar
+para la AI»: «Sin pedido preparado», «Pedido de temas listo (pasada 1). Esperando
+topics.proposed.json», «Pasada 1 validada (28 temas, 39 subtemas). Esperando la pasada 2»,
+«Capa de temas creada. Esperando trims.proposed.json», «Recortes de la AI importados: 12
+en “Cortes sugeridos (AI)”». Si editas capas o recortes después de preparar un pedido, la
+línea avisa en amarillo **«El pedido quedó viejo: editaste capas o recortes después de
+prepararlo. Pulsa Preparar de nuevo»**: cualquier respuesta de la AI a ese pedido se
+rechazaría (la app comprueba que la foto de capas con la que se preparó sea la vigente).
+Si una respuesta no se pudo importar, la segunda línea muestra «Último error: …» hasta que
+llegue una válida.
+
+El flujo completo, en orden: importar el video → marcar VOZ → **Procesar pistas de voz** →
+(bloques con la AI, opcional) → **Analizar silencios** → revisar el carril → **Preparar
+para la AI** → esperar y revisar lo que propuso → **Exportar con recortes** → abrir el
+video recortado → sobre ese hijo, otra vez **Preparar para la AI** (temas, recortes
+profundos o el montaje por temas).
+
 ## 1. Importar y procesar las pistas de voz
 
 1. **Importar video** (o audio). Aparece el timeline con una forma de onda por pista.
@@ -59,9 +100,9 @@ La app no ejecuta ninguna AI: prepara el paquete y espera su respuesta.
    **Importar JSON de la AI**). Valida identidad y cobertura, rechaza huecos, solapes y
    bloques de más de 3000 s, y ajusta cada límite hasta 15 s para no partir palabras ni
    risas de ninguna pista. El timeline pinta cada bloque de un color con su título.
-4. **Revisar chunks** permite editar títulos y límites y ver confianza y advertencias.
+4. **Revisar bloques** permite editar títulos y límites y ver confianza y advertencias.
    Guardar vuelve a ajustar los bordes y regenera `chunks/<id>/` sin repetir análisis.
-5. **Aceptar y exportar cortes** crea un video por bloque (sin recortes; ver §5 para la
+5. **Exportar bloques** crea un video por bloque (sin recortes; ver §5 para la
    exportación con recortes).
 
 Existen dos modos internos de planificación (`--chunker codex` con Codex CLI y
@@ -140,11 +181,13 @@ Todo se guarda solo en `views/trims.json` tras cada cambio. Los recortes se atan
 La heurística solo ve dónde hay y dónde no hay palabras. La pasada editorial es de la AI,
 sobre el bloque ya acortado:
 
-1. **Preparar revisión AI** escribe `views/trim-agent-request.md` (contrato y lista de
-   bloques) y, por bloque, `chunks/<id>/trim-review.md` (o `views/trim-review.md` si no hay
-   bloques): la conversación con los recortes activos marcados como `⟂ RECORTE`, más el
-   tema, resumen, temas y subtemas del bloque. Si editas recortes después, el panel avisa
-   «revisión AI desactualizada»; vuelve a prepararla.
+1. **Preparar para la AI ▾ → Solo recortes** escribe `views/trim-agent-request.md`
+   (contrato y lista de bloques) y, por bloque, `chunks/<id>/trim-review.md` (o
+   `views/trim-review.md` si no hay bloques): la conversación con los recortes activos
+   marcados como `⟂ RECORTE`, más el tema, resumen, temas y subtemas del bloque. Si editas
+   recortes después, la línea de estado avisa «el pedido quedó viejo»; vuelve a prepararlo.
+   (La opción por defecto del botón, *Revisión completa*, hace esto mismo después de pedir
+   los temas; ver «Carriles de recortes, temas y capas de la AI».)
 2. Pídele a la AI la **Tarea 2** de la skill. Su criterio: quitar lo que no aporta a la
    conversación del bloque (tangentes que no llevan a nada, balbuceo, arranques en falso,
    charla técnica) y conservar diversión, continuidad y setups de un payoff posterior.
@@ -156,9 +199,9 @@ sobre el bloque ya acortado:
    su motivo. Una nueva propuesta reemplaza los recortes de la AI que no hayas tocado;
    los que moviste o desactivaste se conservan.
 
-## 5. Cortar y exportar
+## 5. Exportar con recortes
 
-**✂ Cortar y exportar** (sección RECORTES) pide una carpeta de salida y produce, dentro de
+**Exportar con recortes** (sección RECORTES) pide una carpeta de salida y produce, dentro de
 `podcast-<id>/`:
 
 - `001.mp4`, `002.mp4`… un archivo por bloque (o uno solo si no hay bloques), con la
@@ -173,7 +216,7 @@ El original nunca se modifica; una exportación terminada no se sobrescribe (cad
 combinación de plan y recortes va a una carpeta distinta) y se puede cancelar sin dejar
 carpetas a medias. La velocidad depende de la resolución, la duración y la CPU.
 
-**Aceptar y exportar cortes** (botón inferior) hace lo mismo sin aplicar recortes.
+**Exportar bloques** (botón inferior, solo en el padre) hace lo mismo sin aplicar recortes.
 
 El selector **Salida** (encima del botón, se recuerda entre sesiones) elige el formato de
 los dos botones:
@@ -212,13 +255,13 @@ equipo requiere copiar también su proyecto: el video no contiene el transcript.
 
 ## Archivos del proyecto
 
-**Analizar temas (dos pasadas)** prepara la Tarea 3 de la skill. Con un bloque
+**Preparar para la AI ▾ → Solo temas** prepara la Tarea 3 de la skill. Con un bloque
 seleccionado analiza ese bloque; sin selección analiza todo el medio. Entrega a tu
 AI `views/topics-agent-request.md`: su primera respuesta produce `topics-pass1.json`
 y una solicitud actualizada; su segunda respuesta unifica recurrencias en una capa
 de temas/subtemas con varios rangos por tema. Ambos JSON se importan automáticamente.
 Doble click en el item permite corregir rangos y `parent_id`. Para repetir el bucle
-con tus correcciones, pulsa otra vez Analizar temas. Las respuestas antiguas se rechazan.
+con tus correcciones, pulsa otra vez Solo temas. Las respuestas antiguas se rechazan.
 
 ```text
 <proyecto>/editorial/
@@ -303,20 +346,22 @@ Los recortes se ven en **carriles** del timeline que son vistas del mismo `trims
 siendo la unión de todos los activos, estén en el carril que estén. Los temas de la AI
 se muestran como **Temas** y **Subtemas** (carriles por nivel de la misma capa).
 
-- **Añadir capa** (`Ctrl` + `N` o «Capas y comentarios») pregunta el tipo: *Recortes*
+- **Añadir capa** (`Ctrl` + `N` o «Capas…») pregunta el tipo: *Recortes*
   (dibujar una caja crea un corte que cuenta para la exportación, sin diálogo) o
   *Pedidos para la AI* (cada caja abre el pedido con el cursor ya en el texto). La capa
   nueva se coloca encima del carril seleccionado (sin selección, arriba de los recortes).
-- **Capas y comentarios** también renombra, recolorea, sube o baja (▲ ▼) y borra
+- **Capas…** también renombra, recolorea, sube o baja (▲ ▼) y borra
   carriles. Al borrar un carril de recortes tuyo la app pregunta si mover sus cortes a
   «Recortes» o borrarlos. Una capa de la AI borrada no vuelve a aparecer aunque la AI la
   proponga otra vez. El orden vive en `views/lanes.json` y se reconstruye solo.
-- **Preparar revisión editorial** escribe en un solo pedido la solicitud de temas (dos
-  pasadas), el paquete de revisión de recortes y `views/editorial-agent-request.md`
-  (Tarea 4 de la skill): la AI hace primero los temas y después los recortes de
-  contenido usando ese mapa, sin volver a proponer sobre lo que ya aceptaste con `A`.
-  Puede responder con varias capas a la vez (`layers: [...]`, `kind: "ai"`) y la app las
-  importa solas al aparecer, respetando lo que editaste o borraste.
+- **Preparar para la AI** (la opción por defecto, *Revisión completa*) escribe en un
+  solo pedido la solicitud de temas (dos pasadas), el paquete de revisión de recortes y
+  `views/editorial-agent-request.md` (Tarea 4 de la skill): la AI hace primero los temas
+  y después los recortes de contenido usando ese mapa, sin volver a proponer sobre lo que
+  ya aceptaste con `E`. Puede responder con varias capas a la vez (`layers: [...]`,
+  `kind: "ai"`) y la app las importa solas al aparecer, respetando lo que editaste o
+  borraste. Todas las variantes escriben antes `views/layers.json` (la foto de capas que
+  lee la AI); esa foto también se reescribe sola tras cada cambio en el timeline.
 - La barra de detalle y el tooltip muestran el origen (silencio, AI, tuyo) junto al
   estado; un recorte aceptado lleva borde verde.
 
@@ -342,7 +387,7 @@ Opciones de `run`: `--model` (Whisper), `--language`, `--device auto|cpu|cuda`,
 
 ## Atajos del timeline
 
-**Capas y comentarios** crea, renombra, cambia el color o elimina capas propias.
+**Capas…** crea, renombra, cambia el color o elimina capas propias.
 Puedes dejar marcas y pedidos antes de transcribir; se guardan en
 `<nombre-del-video>/editorial/layers/` y se conservan al generar la metadata allí.
 Para analizar temas hace falta el transcript del proyecto.
@@ -351,9 +396,10 @@ moverlo/estirarlo y usa doble click para editar etiqueta, comentario, estado y l
 de tramos. Un item con varios rangos se selecciona como unidad; cada tramo se puede
 ajustar por separado. `X` cambia estado, `Supr` borra, `Esc` deselecciona.
 El menú derecho y el tooltip son comunes. Los bloques mantienen cobertura continua
-y ajustan sus vecinos al cambiar un borde; dividir el plan usa **Revisar chunks**.
+y ajustan sus vecinos al cambiar un borde; dividir el plan usa **Revisar bloques**.
 Las marcas envuelven el Registro compartido y los recortes mantienen `trims.json`:
-no hay dos copias editables. **Preparar capas para AI** publica `views/layers.json`.
+no hay dos copias editables. `views/layers.json` (la foto que lee la AI) se escribe
+sola tras cada cambio y en cada «Preparar para la AI».
 
 Todo lo que hace una tecla también se hace con el mouse. La barra sobre el timeline tiene,
 a la izquierda, las herramientas (Selección / Corte, deshacer, rehacer, dividir, recortar

@@ -672,3 +672,29 @@ para otro agente en `docs/plan-montaje-ai.md`, con los textos de skill de las ta
 nuevas. Hallazgo al redactarlo: «Cortar y exportar» ya publica un proyecto hijo por
 video con el master derivado a los segmentos conservados (`publish_child`), así que
 la reimportación pedida existe; falta propagar las capas de temas al hijo.
+
+## 2026-09-07 — Panel derecho: un botón para la AI y estado del ciclo (0.3.6)
+
+Fase A del plan de montaje (`docs/plan-montaje-ai.md` §4). Gabriel no sabía cuál de los
+tres botones de «preparar» pulsar ni en qué punto estaba el ciclo con la AI (la
+propuesta de ChatGPT rechazada por «las capas cambiaron» solo se veía en la consola).
+El panel queda en el orden del flujo: Conversación · Revisar bloques · Importar JSON ·
+RECORTES (Analizar silencios · Exportar con recortes · Saltar recortes) · Salida ·
+Exportar bloques · Abrir proyecto · Procesar pistas / Reanudar · Capas… · **Preparar
+para la AI ▾** · línea de estado. El desplegable ofrece Revisión completa (por
+defecto), Solo temas, Solo recortes (y en las fases siguientes Recortes profundos y
+Montaje por temas); «Preparar capas para AI» desaparece porque `views/layers.json` ya
+se escribe tras cada cambio y en cada Preparar. En un video recortado (hijo) se
+ocultan Procesar pistas y Exportar bloques. Módulo puro nuevo `editorial_cycle.py`
+(`status(views, layers_digest, last_error)`), con `tests/test_cycle.py` (7 tests): sin
+pedido, temas pasada 1/2/hecha, revisión completa hasta «recortes importados: N en
+«Cortes sugeridos (AI)»», solo recortes (normal y profundo), propuesta rechazada con
+«Último error», montaje, y **«el pedido quedó viejo»** cuando el digest de la foto de
+capas ya no es el del pedido (el caso que confundió a Gabriel). Tooltips en todos los
+botones. De paso, dos carreras reales: el sondeo reimportaba un JSON importado a mano
+(«pasada fuera de orden» espurio) y un `trims_loaded` tardío pisaba un documento
+editado después; y el `rename` final de la exportación reintenta ante el bloqueo
+transitorio de Windows. 129 tests y smoke completo (con las comprobaciones nuevas:
+etiqueta de estado, pedido viejo, botones ocultos en el hijo y «Cancelar» visible
+mientras trabaja). Probado contra el proyecto real: pendiente hasta reinstalar la
+release con la app cerrada.

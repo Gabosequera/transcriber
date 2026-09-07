@@ -817,7 +817,8 @@ def review_markdown(master: dict, block: dict, document: dict | None) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def agent_request_markdown(master: dict, blocks: list[dict], document: dict | None) -> str:
+def agent_request_markdown(master: dict, blocks: list[dict], document: dict | None, *,
+                           layers_digest: str | None = None) -> str:
     digest = editorial_chunks.source_master_digest(master)
     summary = stats(document)
     listing = "\n".join(
@@ -825,6 +826,9 @@ def agent_request_markdown(master: dict, blocks: list[dict], document: dict | No
         + (f" (`{block['chunk_id']}`)" if block["chunk_id"] else "")
         + f" · {format_time(block['t_ini'])}–{format_time(block['t_fin'])}"
         for block in blocks)
+    # la foto de capas con la que se preparó: la etiqueta de estado del panel avisa
+    # «pedido viejo» si el humano edita recortes o capas antes de que la AI responda
+    layers_line = f"source_layers_digest: {layers_digest}\n" if layers_digest else ""
     return f"""# Solicitud de recortes de contenido — Transcriptor
 
 Usa la skill `transcriptor` (`skills/transcriptor/SKILL.md`), sección «Recortes de
@@ -833,7 +837,7 @@ humana) ya dejó {summary['enabled']} recortes activos ({format_time(summary['re
 en total). Están marcados como `⟂ RECORTE` dentro de cada revisión.
 
 source_master_digest: {digest}
-Duración total: {master['media']['duration']:.3f} segundos. Tiempos absolutos del video original.
+{layers_line}Duración total: {master['media']['duration']:.3f} segundos. Tiempos absolutos del video original.
 
 Bloques a revisar (lee cada archivo COMPLETO antes de proponer nada de ese bloque):
 {listing}
@@ -870,7 +874,7 @@ muestra tus recortes en violeta en el timeline y el humano decide antes de corta
 
 
 def write_review_package(root: str | Path, master: dict, plan: dict | None,
-                         document: dict | None) -> dict[str, Path]:
+                         document: dict | None, *, layers_digest: str | None = None) -> dict[str, Path]:
     root = Path(root)
     blocks = review_blocks(master, plan)
     paths = {}
@@ -879,7 +883,8 @@ def write_review_package(root: str | Path, master: dict, plan: dict | None,
         paths[block["chunk_id"] or "completo"] = atomic_write_text(
             target, review_markdown(master, block, document))
     paths["request"] = atomic_write_text(root / "views" / "trim-agent-request.md",
-                                         agent_request_markdown(master, blocks, document))
+                                         agent_request_markdown(master, blocks, document,
+                                                                layers_digest=layers_digest))
     return paths
 
 

@@ -42,13 +42,14 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
    pista, con reanudación (no repite lo ya hecho).
 3. **Bloques por tema**: la AI lee `views/conversation.md` con la skill incluida y escribe
    `views/cuts.proposed.json`; la app lo valida, ajusta bordes y lo pinta en colores.
-4. **Revisar chunks**: títulos y límites, sin repetir análisis.
+4. **Revisar bloques**: títulos y límites, sin repetir análisis.
 5. **Analizar silencios**: propone recortes en los huecos sin voz de ninguna pista. Nada se
    corta: se ven en el carril «recortes» y se ajustan con el mouse.
-6. **Revisión de la AI** (opcional): propone recortes de contenido que no aporta, nunca
-   por humor fuerte ni lisuras. También aparecen en el carril para revisar.
-7. **Cortar y exportar**: recién aquí se cortan los videos, con todas las pistas de audio
-   y precisión de fotograma. El original no se toca.
+6. **Preparar para la AI** (un solo botón con variantes): temas y subtemas, recortes de
+   contenido que no aporta (nunca por humor fuerte ni lisuras), recortes profundos o el
+   montaje por temas. Todo aparece en el timeline para revisar.
+7. **Exportar con recortes**: recién aquí se cortan los videos, con todas las pistas de
+   audio y precisión de fotograma. El original no se toca.
 8. **Volver a un proyecto**: importa el mismo video y abre su master; la identidad es por
    contenido, no por ruta.
 
