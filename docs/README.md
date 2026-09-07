@@ -11,6 +11,7 @@ está en `skills/transcriptor/SKILL.md` porque se distribuye como skill, no como
 |---|---|
 | Usar el modo Automático (podcast: pistas → bloques → recortes → AI → exportar) | [guia-automatico.md](guia-automatico.md) |
 | Implementar la navegación y edición tipo editor (velocidad ×2–×8, atajos configurables, herramientas Selección/Corte con selección múltiple, deshacer, carriles de temas/subtemas y cortes de la AI): diseño + prompt | [diseno-navegacion-editor.md](diseno-navegacion-editor.md) |
+| Implementar la siguiente etapa (panel derecho simplificado, recortes profundos, hijo con temas heredados, timeline de montaje con pistas de video y la Tarea 5 «Montaje por temas» de la AI): plan por fases para un agente | [plan-montaje-ai.md](plan-montaje-ai.md) |
 | Usar el modo Manual (Transcribir, Limpiar audio, Extraer metadata, Marcar) | [guia-manual.md](guia-manual.md) |
 | Saber qué decisiones de producto están vigentes y cuáles quedaron fuera | [especificacion-editorial.md](especificacion-editorial.md) |
 | Entender cómo está implementado, qué no romper y qué falta | [referencia-tecnica.md](referencia-tecnica.md) |

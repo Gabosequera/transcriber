@@ -535,6 +535,17 @@ que comparte borde con el padre debe seguirlo (se localiza el rango padre por su
 bordes `proposed` y el borde huérfano apunta al borde ajustado del padre). Pendiente:
 completar el ciclo (pasada 2 y recortes) con la app reinstalada en 0.3.5.
 
+### Siguiente etapa — plan en [plan-montaje-ai.md](plan-montaje-ai.md)
+
+Seis fases para otro agente: A panel derecho con un solo «Preparar para la AI ▾» y
+estado del ciclo visible (incluido «el pedido quedó viejo» cuando se edita durante el
+análisis); B Tarea 2 «modo profundo» con lane `ai-deep`; C el hijo exportado hereda
+temas y capas por `map_range` y «Abrir el video recortado»; D timeline de montaje
+(`views/montaje.json`, clips, pistas de video V1/V2…, preview por re-sesión,
+`export_montage`); E Tarea 5 «Montaje por temas» (pedido, transcript con temas
+intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve. Los
+textos de skill de B y E están redactados en el plan.
+
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
 El pie de estado del editor tiene altura fija y su wrap sigue al ancho real de la

@@ -660,3 +660,15 @@ apunta al borde del padre, así que `snap_boundary` lo deja pegado a él. Los me
 de error nombran el `item_id`. Test de regresión con una palabra que cruza el borde
 final compartido; 122 tests. La propuesta real valida completa (67 rangos ajustados,
 todos los subtemas dentro de su padre).
+
+Misma sesión: la segunda propuesta (ChatGPT, 35 items) también quedó sin importar,
+esta vez porque Gabriel editó un recorte entre «Preparar» e importar y el
+`source_layers_digest` ya no coincidía; la app lo rechaza bien pero solo lo dice la
+consola. Gabriel pidió además aclarar el panel derecho («tres botones para preparar
+para la AI y no sé cuál pulsar»), una pasada de recortes más profunda, reimportar el
+video recortado con su metadata y una etapa nueva de montaje por temas con la AI
+(clips reordenables y pistas de video). Todo eso quedó escrito como plan por fases
+para otro agente en `docs/plan-montaje-ai.md`, con los textos de skill de las tareas
+nuevas. Hallazgo al redactarlo: «Cortar y exportar» ya publica un proyecto hijo por
+video con el master derivado a los segmentos conservados (`publish_child`), así que
+la reimportación pedida existe; falta propagar las capas de temas al hijo.
