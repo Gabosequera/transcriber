@@ -131,8 +131,7 @@ def main():
                 topic=next(l for l in store.visible() if l['kind']=='topics')
                 assert len(topic['items'][0]['ranges'])==2
                 spin(lambda: not workspace.worker.is_alive())
-                app.update()
-                assert workspace.cycle_label.cget("text").startswith("Capa de temas creada"), workspace.cycle_label.cget("text")
+                spin(lambda: workspace.cycle_label.cget("text").startswith("Capa de temas creada"))
                 topic['items'][0]['comment']='Recurrencia revisada a mano'
                 controller.persist(topic['layer_id'],topic['items'][0])
                 assert layers.LayerStore(store.root,data).layers[topic['layer_id']]['items'][0]['edited']
