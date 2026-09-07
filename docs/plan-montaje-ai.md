@@ -8,6 +8,16 @@ tocar nada.
 
 Fecha de redacción: 2026-09-07. Versión instalada al redactarlo: 0.3.5.
 
+> **Estado (2026-09-07, misma fecha):** las seis fases están implementadas y
+> reinstaladas (A 0.3.6 · B 0.3.7 · C 0.3.8 · D 0.3.9 · E y F 0.4.0). Lo que se
+> aparta de este texto está anotado en `docs/historial.md` y en la referencia técnica
+> §7 («Montaje por temas con la AI»): el mapa de tiempo del editor (`mapa_tiempo`) en
+> vez de tocar `_tl_geo`, el conmutador Fuente|Montaje en la columna 4 del transporte,
+> `Ctrl+Shift+A/T/R` y `Ctrl+Shift+↑/↓` como teclas del montaje, EDL y FCPXML escritos
+> siempre junto al montaje (sin opción en «Salida»), y la caja MONTAJE del panel con la
+> duración objetivo. Pendiente de Gabriel: el ciclo real con la AI (Tareas 4 y 5) y la
+> exportación del montaje sobre su proyecto.
+
 ---
 
 ## 0. Cómo usar este documento
