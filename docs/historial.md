@@ -492,3 +492,11 @@ profundidad de la misma capa `topics`, cortes sugeridos de la AI como vista por
 origen del mismo `trims.json` (la exportación sigue cortando la unión de los
 activos), `kind: "ai"` y respuestas con varias capas para que la skill añada las que
 necesite, y un solo pedido «Preparar revisión editorial» (Tarea 4).
+
+Última ampliación del diseño: los carriles de recortes pasan a ser `lanes` del
+`trims.json` único (dos de fábrica, `main` y `ai`, más los que añada el usuario),
+los solapes dentro de un carril se funden en un solo corte con reglas de actor y
+sin cambiar `enabled_intervals`, «Añadir capa» ofrece dos tipos (Recortes: sin
+diálogo al dibujar; Pedidos para la AI: diálogo con foco en el pedido y Escape
+guarda), la capa nueva se inserta encima de la seleccionada vía `views/lanes.json`,
+y una sola tecla de toggle (B) entra y sale de la herramienta Corte.

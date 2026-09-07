@@ -184,6 +184,7 @@ Herramientas y selección múltiple (detalle en §7 y §8):
 | Alternar herramienta Selección ↔ Corte | B | Una sola tecla de toggle: entra en Corte y, pulsada otra vez, vuelve a Selección. Acción `tools.toggle_cut`, configurable en Ajustes → Atajos como todas |
 | Volver a Selección | V | Explícita, por si se prefiere una tecla por herramienta (`tools.select`) |
 | Seleccionar todo el carril | Ctrl+A | Todos los items del carril del item seleccionado (o bajo el playhead) |
+| Añadir capa | Ctrl+N | Selector de tipo (Recortes / Pedidos para la AI); se inserta encima del carril seleccionado (§10) |
 | Mover la selección | ← → | Con items seleccionados las flechas mueven la selección ±1 fotograma (Shift ±10) y el playhead la sigue; sin selección mueven el playhead como hoy. Alt+←/→ siempre mueve la selección |
 | Sobre varios: activar/desactivar, aceptar, borrar | X A Supr | Aplican a todo el conjunto en una sola escritura (una entrada de deshacer) |
 
@@ -302,8 +303,15 @@ la activa. El scrub sobre las pistas de audio no cambia con la herramienta.
 editable; los bloques solo admiten mover límites (cobertura continua), así que en
 «Bloques» esta herramienta solo estira/encoge límites y nunca crea, resta ni divide.
 
-- Arrastrar una caja y soltar: nace un item con ese rango, **sin diálogo** (etiqueta por
-  defecto; Enter o doble click lo edita). En «recortes» el origen es `user` (naranja).
+- Arrastrar una caja y soltar: nace un item con ese rango. Lo que pasa después depende
+  del **tipo de carril** (§10): en un carril de **recortes** no se abre ningún diálogo
+  (queda creado, en naranja, origen `user`; Enter o doble click lo editan cuando haga
+  falta); en un carril de **pedidos para la AI** se abre el diálogo con el foco ya
+  puesto en el campo del pedido, sin tocar el mouse, y Escape guarda y cierra.
+- **Solapes = uno solo.** Si el item creado, movido o estirado se solapa con otros del
+  mismo carril, se funden en uno (unión de rangos). Vale para las tres herramientas y
+  para las importaciones (silencios y propuestas de la AI dentro de su carril). Los que
+  solo se tocan por el borde siguen separados. Detalle en §10.
 - Si la caja empieza o termina dentro de un item existente del carril, ese item **se
   estira** a la unión de ambos rangos. Si la caja toca varios, se funden en uno (el
   primero sobrevive con la unión; los demás se borran). Comentarios: se conserva el del
@@ -361,23 +369,26 @@ solo acepta `kind` `user` o `topics`.
 
 **Diseño (sin cambiar la autoridad de los datos).**
 
-- **Carriles por origen para los recortes.** El adaptador `recortes` se divide en dos
-  vistas del mismo `trims.json`: `recortes-ai` («Cortes sugeridos (AI)», violeta) con
-  los cortes de origen `ai`, y `recortes` («Recortes», azul/naranja) con `silence` y
-  `user`. Mismas operaciones (mover, estirar, X, A, Supr, dividir); crear en el carril
-  de la AI produce origen `user` y por tanto aparece en el carril de abajo. La
-  exportación no cambia: unión de `enabled` de todo el documento. El campo `accepted`
-  de §3.1 vale igual para los cortes de la AI: A alterna aceptado / no aceptado.
+- **Carriles de recortes = «lanes» del mismo `trims.json`** (§10). Cada corte lleva un
+  campo aditivo `lane`; el documento declara sus carriles en `lanes: [...]`. Dos vienen
+  de fábrica: `main` («Recortes»: silencios de la heurística y cortes tuyos) y `ai`
+  («Cortes sugeridos (AI)», violeta, encima del anterior). `merge_proposal` escribe en
+  `ai`; `apply_silence_analysis` en `main`. Mismas operaciones en todos (mover, estirar,
+  X, A, Supr, dividir, fusionar solapes). La exportación no cambia: unión de `enabled`
+  de todo el documento, carril aparte. El campo `accepted` de §3.1 vale igual para los
+  cortes de la AI: A alterna aceptado / no aceptado.
 - **Temas arriba, subtemas debajo.** La capa `topics` se guarda como hoy (una capa,
   jerarquía y protecciones intactas) pero `lanes()` la **presenta** como varios
   carriles por profundidad: «Temas» (`parent_id` nulo), «Subtemas» (profundidad 1),
   «Subtemas 2» si hubiera más niveles. El carril sabe a qué `layer_id` pertenece;
   `persist` no cambia. Mover un tema no arrastra a sus subtemas (son items
   independientes con rangos propios, como hoy).
-- **Orden de carriles** fijo y legible, de arriba abajo: Marcas del autor · Bloques ·
-  Temas · Subtemas · Cortes sugeridos (AI) · Recortes · capas propias y de la AI (por
-  campo `order`, editable con ▲▼ en «Capas y comentarios»). El nombre del carril se
-  pinta como hoy en la esquina.
+- **Orden de carriles** por defecto, de arriba abajo: Marcas del autor · Bloques ·
+  Temas · Subtemas · Cortes sugeridos (AI) · Recortes · capas propias y de la AI. El
+  orden real vive en `views/lanes.json` (§10): lista ordenada de ids de carril, solo
+  presentación, reconstruible; los carriles nuevos se insertan donde diga la regla de
+  «encima del seleccionado» y ▲▼ en «Capas y comentarios» lo reordenan. El nombre del
+  carril se pinta como hoy en la esquina.
 - **La skill puede crear las capas que necesite.** La respuesta de capas admite
   `layers: [...]` además de `layer` (compatibilidad), cada una fundida con
   `merge_response` y sus protecciones (items editados y borrados por el humano nunca se
@@ -395,6 +406,55 @@ solo acepta `kind` `user` o `topics`.
   `_pump`); no hace falta un importador nuevo. La skill documenta esto como Tarea 4.
 - La barra de detalle y el tooltip muestran el origen («AI», «silencio», «tuyo») junto
   al estado; el badge ACEPTADO ya existe.
+
+### 10. Capas que añade el usuario: tipos, posición, solapes y diálogo
+
+**Dos tipos al pulsar «Añadir capa»** (en «Capas y comentarios» y con la acción
+`layers.new_lane`, Ctrl+N, que abre el mismo selector):
+
+| Tipo | Dónde vive | Qué pasa al dibujar una caja |
+|---|---|---|
+| **Recortes** | Un carril (`lane`) nuevo dentro de `trims.json` | Nace un corte `user` sin diálogo; cuenta para la exportación como cualquier otro |
+| **Pedidos para la AI** | Una capa `kind: "user"` en `layers/` (las de hoy, con nombre claro) | Se abre el diálogo con el foco en el pedido; Escape guarda y cierra |
+
+Es la única distinción específica por ahora; más tipos entrarían por la misma tabla.
+
+**Recortes como carriles del documento único.** `trims.json` gana dos campos
+aditivos: `lanes: [{lane_id, name, color}]` y, en cada corte, `lane`. Los archivos
+antiguos cargan sin migración: `lane` ausente se deriva del origen (`ai` → `ai`, lo
+demás → `main`) y `lanes` ausente equivale a los dos de fábrica. Un carril de recortes
+creado por el usuario es una entrada más en `lanes`; borrarlo desde «Capas y
+comentarios» mueve sus cortes a `main` o los borra (la app pregunta). `adapters`
+produce una capa de UI por lane y `persist` escribe en el lane del carril. La
+exportación, «Saltar recortes al reproducir» y las estadísticas siguen leyendo el
+documento completo: **la unión de los `enabled` de todos los lanes**.
+
+**Posición: encima de la capa seleccionada.** El carril seleccionado es el del último
+click en el timeline (`LayersController.selected[0]`, exista item o no). Al añadir una
+capa de cualquier tipo, `views/lanes.json` la inserta justo antes de ese carril; sin
+selección, va arriba de los carriles de recortes. `lanes.json` es una lista de ids
+(`autor`, `bloques`, `topics:<id>:0`, `topics:<id>:1`, `trims:ai`, `trims:main`,
+`trims:<lane_id>`, `layer:<layer_id>`); ids desconocidos se descartan al cargar y los
+carriles nuevos sin entrada se colocan en su posición por defecto.
+
+**Solapes dentro de un carril se funden en uno.** Regla `coalesce(lane)` aplicada en
+`persist`/`persist_many` tras crear, mover, estirar o dividir, y en las importaciones
+(`apply_silence_analysis`, `merge_proposal`): dos cortes del mismo lane cuyos rangos se
+solapan estrictamente (`a.t_ini < b.t_fin and b.t_ini < a.t_fin`) se reemplazan por uno
+con la unión. El **actor** (el corte que el usuario acaba de crear o mover; en las
+importaciones, el más largo) impone `origin`, `enabled` y `accepted`; `reason` se
+concatena con « · » sin duplicados; la evidencia de la AI se conserva si alguno la
+tenía; el `cut_id` superviviente es el del actor. Los que solo se tocan por el borde no
+se funden. Es idempotente y O(n) sobre el lane ordenado, así que también sanea
+documentos viejos al cargar (sin escribir hasta la primera edición). Un solape entre
+carriles distintos no se toca: la unión ya la hace la exportación.
+
+**Diálogo de pedido para la AI.** `edit_dialog(focus="comment")`: al abrirse por una
+creación en una capa de pedidos, el cursor queda en el campo del pedido (sin click).
+`Escape` guarda y cierra (si la validación falla, muestra el error y sigue abierto);
+`Ctrl+Enter` guarda y cierra; cerrar con la X de la ventana también guarda lo escrito
+(un item recién creado con pedido vacío se conserva igual, como hoy). El foco vuelve al
+timeline al cerrar. Abierto desde Enter o doble click, el comportamiento es el mismo.
 
 ---
 
@@ -446,11 +506,16 @@ con el código real, para y explica el conflicto antes de escribir código.
   exportación en general: lo que se corta sigue siendo la unión de los `enabled` de
   `trims.json`, sin importar en qué carril se vean ni qué capas haya en `layers/`.
   No cambies el pie fijo del editor ni `LayerDetailBar` (solo añade el origen al texto).
-- `trims.json` sigue siendo el único documento de recortes (los dos carriles son
-  vistas por origen). La capa `topics` sigue siendo una sola capa en `layers/` (los
-  carriles por profundidad son presentación). Los cambios de esquema son aditivos
-  (`accepted`, `order`, `kind: "ai"`, `layers: [...]` en la respuesta) y todo archivo
-  antiguo debe seguir cargando sin migración.
+- `trims.json` sigue siendo el único documento de recortes: los carriles de recortes,
+  de fábrica o añadidos por el usuario, son `lanes` del mismo archivo. La capa `topics`
+  sigue siendo una sola capa en `layers/` (los carriles por profundidad son
+  presentación). `views/lanes.json` es solo orden, reconstruible. Los cambios de
+  esquema son aditivos (`accepted`, `lane`, `lanes`, `kind: "ai"`, `layers: [...]` en
+  la respuesta) y todo archivo antiguo debe seguir cargando sin migración (`lane` se
+  deriva del origen).
+- La fusión de solapes (§10) nunca cruza carriles y nunca cambia el resultado de
+  `enabled_intervals` dentro de un carril (la unión de los activos es la misma antes y
+  después); un test lo demuestra con documentos aleatorios.
 - Las protecciones de `merge_response` (items editados o borrados por el humano nunca
   se pisan; tumba persistente de capas borradas) se aplican a cada capa de una
   respuesta múltiple exactamente igual que hoy a una.
@@ -515,21 +580,33 @@ herramientas en la columna libre del transporte, acciones `tools.toggle_cut` (B,
 toggle) y `tools.select` (V) en el keymap y visibles en Ajustes → Atajos, cursores,
 marquesina, arrastre del conjunto con previsualización, Corte con Shift y Ctrl, click
 corto que selecciona.
-Hit-test y marquesina por `visible_parts`. Smoke Tk: marquesina de 3 recortes → X → los
+Hit-test y marquesina por `visible_parts`. Incluye `coalesce(lane)` (§10) con tests:
+solape estricto se funde con las reglas del actor, contacto por el borde no, idempotente,
+y `enabled_intervals` idéntico antes y después sobre documentos aleatorios. Crear en un
+carril de recortes no abre diálogo; crear en una capa de pedidos abre `edit_dialog`
+con el foco en el pedido y Escape guarda (test Tk: `focus_get()` es el campo del
+pedido; Escape persiste el texto). Smoke Tk: marquesina de 3 recortes → X → los
 tres desactivados con una sola revisión nueva de `trims.json`; arrastre del conjunto →
-un solo guardado; Shift+caja dentro de un recorte → dos recortes que conservan
-`accepted`; Ctrl+arrastre en Corte → mueve; Ctrl+Z deshace cada gesto entero. Medición:
+un solo guardado; caja que pisa dos recortes → queda uno; Shift+caja dentro de un
+recorte → dos recortes que conservan `accepted`; Ctrl+arrastre en Corte → mueve;
+Ctrl+Z deshace cada gesto entero. Medición:
 mover 200 recortes seleccionados ≤ 100 ms desde soltar hasta redibujado; hover con
 5.000 recortes en el carril sin tocar la lista entera (perfilar `hit`).
 
-**Fase 7 — capas de la AI (§9).** Adaptadores `recortes-ai` / `recortes` sobre el
-mismo `trims.json`; carriles por profundidad de `topics`; orden fijo de carriles y
-campo `order` con ▲▼ en «Capas y comentarios»; `kind: "ai"`; `layers: [...]` en la
+**Fase 7 — capas de la AI y carriles (§9, §10).** `lanes`/`lane` en `trims.json` con
+carga de archivos antiguos (lane derivado del origen) y adaptador por lane; carriles
+por profundidad de `topics`; `views/lanes.json` con la regla «encima del seleccionado»
+y ▲▼ en «Capas y comentarios»; «Añadir capa» con los dos tipos (Recortes → lane nuevo;
+Pedidos para la AI → capa `user`) y la acción `layers.new_lane`; borrar un lane de
+recortes pregunta si mover sus cortes a `main` o borrarlos; `kind: "ai"`; `layers: [...]` en la
 respuesta (con `layer` aún aceptado); `write_review_package` expone `accepted` y
 `origin`; botón «Preparar revisión editorial» y `views/editorial-agent-request.md`;
 Tarea 4 en `skills/transcriptor/SKILL.md` (Tarea 3 en dos pasadas, luego Tarea 2 con el
 mapa de temas, sin duplicar cortes aceptados). Tests: un `trims.json` con los tres
-orígenes se reparte en dos carriles y `enabled_intervals` no cambia; una propuesta con
+orígenes se reparte en dos carriles y `enabled_intervals` no cambia; un `trims.json`
+sin `lane` carga y exporta igual que antes; un lane nuevo del usuario recibe sus cortes
+y la exportación los une con los demás; `lanes.json` inserta encima del seleccionado y
+descarta ids desconocidos; una propuesta con
 dos capas se funde respetando items editados y borrados; una capa `ai` se puede borrar
 y no resucita; una capa `topics` con dos niveles produce dos carriles y `persist` desde
 el carril «Subtemas» escribe en la misma capa; el paquete de revisión lista `accepted`.
