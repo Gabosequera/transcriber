@@ -502,6 +502,37 @@ VS_GRACIA_S = 8.0                  # STARTING: tope hasta el primer frame
 VS_HAMBRE_S = 1.5                  # RUNNING: sin frames nuevos y buffer vacío → atraso
 VS_COOLDOWN_S = 3.0                # entre respawns
 VS_RESPAWNS_MAX = 4                # por sesión de play
+# Velocidad (diseño docs/diseno-navegacion-editor.md §1): el decodificador procesa
+# rate × tiempo real de fuente; desde ×2 salta los B-frames (el filtro fps rellena
+# duplicando) y desde ×6 solo decodifica fotogramas clave (skim). Son opciones de
+# ENTRADA (antes de -i).
+VS_SKIP_BIDIR_RATE = 2.0
+VS_SKIP_NOKEY_RATE = 6.0
+
+
+def skip_para_rate(rate: float) -> str | None:
+    """Valor de `-skip_frame` para una velocidad, o None a velocidad normal."""
+    rate = float(rate)
+    if rate >= VS_SKIP_NOKEY_RATE:
+        return "nokey"
+    if rate >= VS_SKIP_BIDIR_RATE:
+        return "bidir"
+    return None
+
+
+def comando_stream(video, t0: float, w: int, h: int, fps: float, dur: float | None = None,
+                   skip: str | None = None) -> list[str]:
+    """La línea de ffmpeg del VideoStream (pura, testeable sin decodificar): decodifica
+    desde `t0` a `fps` frames por segundo de MEDIO, tamaño fijo, rawvideo RGB24."""
+    cmd = ["ffmpeg", "-v", "error", "-nostdin"]
+    if skip:
+        cmd += ["-skip_frame", skip]
+    cmd += ["-ss", f"{max(0.0, float(t0)):.3f}", "-i", str(video), "-an", "-sn", "-dn"]
+    if dur is not None:
+        cmd += ["-t", f"{max(0.0, float(dur)):.3f}"]
+    cmd += ["-vf", f"fps={float(fps):g},scale={int(w)}:{int(h)},setsar=1",
+            "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]
+    return cmd
 
 
 class VideoStream:
@@ -525,12 +556,13 @@ class VideoStream:
                                                "failed", "stopped")
 
     def __init__(self, video, t0: float, w: int, h: int, fps: float = VS_FPS,
-                 dur: float | None = None):
+                 dur: float | None = None, skip: str | None = None):
         self.t0, self.fps = max(0.0, float(t0)), float(fps)
         self.w, self.h = int(w) // 2 * 2, int(h) // 2 * 2
         if self.w <= 0 or self.h <= 0 or self.fps <= 0:
             raise ValueError(f"dims/fps inválidos: {w}×{h}@{fps}")
         self._video, self._dur = str(video), dur
+        self.skip = skip                       # -skip_frame (velocidad ≥ ×2) o None
         self._buf: deque = deque()             # (ts, PIL.Image)
         self._cond = threading.Condition()
         self._stop = False
@@ -604,12 +636,8 @@ class VideoStream:
         from PIL import Image
         import tempfile
         fsize = self.w * self.h * 3
-        cmd = ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{self.t0:.3f}",
-               "-i", self._video, "-an", "-sn", "-dn"]
-        if self._dur is not None:
-            cmd += ["-t", f"{max(0.0, float(self._dur)):.3f}"]
-        cmd += ["-vf", f"fps={self.fps:g},scale={self.w}:{self.h},setsar=1",
-                "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]
+        cmd = comando_stream(self._video, self.t0, self.w, self.h, self.fps, self._dur,
+                             self.skip)
         # stderr a un tempfile (r1.7: capturado para diagnóstico) — un PIPE sin lector
         # podría bloquear a ffmpeg si spamea errores
         errf = tempfile.TemporaryFile()
@@ -689,15 +717,19 @@ class SesionVideo:
     de animación); `log` recibe mensajes para la consola."""
 
     def __init__(self, video, t0: float, w: int, h: int, info: dict | None = None,
-                 log=None):
+                 log=None, rate: float = 1.0):
         self._video, self._info, self._log = str(video), info, (log or (lambda m: None))
         self.w, self.h = int(w), int(h)
-        self.fps = VS_FPS
+        # velocidad (§1): fps = VS_FPS/rate frames por segundo de MEDIO = 30 por segundo
+        # de pared a cualquier velocidad; `ts = t0 + n/fps` sigue siendo exacto
+        self.rate = max(0.01, float(rate))
+        self.fps = VS_FPS / self.rate
+        self.skip = skip_para_rate(self.rate)
         self._respawns = 0
         self._ultimo_respawn = 0.0
         self._degradado = False
         self.fallida = False
-        self._stream = VideoStream(self._video, t0, self.w, self.h, self.fps)
+        self._stream = VideoStream(self._video, t0, self.w, self.h, self.fps, skip=self.skip)
 
     def lista(self) -> bool:
         """¿Ya llegó el primer frame? El audio espera este warm-up del video."""
@@ -738,16 +770,16 @@ class SesionVideo:
         self._ultimo_respawn = time.monotonic()
         if self._respawns >= 2 and not self._degradado:
             self._degradado = True
-            self.fps = VS_FPS_DEGRADADO
+            self.fps = VS_FPS_DEGRADADO / self.rate
             # -25% conservando el ASPECTO y sin mínimo que agrande (review r3.2)
             nw = max(2, int(self.w * 0.75)) // 2 * 2
             self.h = max(2, int(round(self.h * nw / max(self.w, 1)))) // 2 * 2
             self.w = nw
             self._log(f"⚠ video atrasado; re-sincronizando (bajé a "
-                      f"{self.fps:g}fps@{self.w}px)")
+                      f"{self.fps * self.rate:g}fps@{self.w}px)")
         self._stream.parar()
         # re-ancla los ts sintéticos al t actual (r1.5: sin drift acumulado)
-        self._stream = VideoStream(self._video, t, self.w, self.h, self.fps)
+        self._stream = VideoStream(self._video, t, self.w, self.h, self.fps, skip=self.skip)
 
     def _fallar(self, motivo: str):
         if not self.fallida:
@@ -969,6 +1001,76 @@ def envolvente_ventana(video, pista_idx: int, t0: float, dur_v: float, buckets: 
 
 
 # ----------------------------------------------------------------------- reproducción --
+_RUBBERBAND_OK: bool | None = None
+
+
+def rubberband_disponible() -> bool:
+    """¿El ffmpeg de esta máquina trae `rubberband` (librubberband: estiramiento con
+    tono conservado, la mejor calidad para voz)? Sondeado UNA vez por proceso (como
+    `podcast_export.filter_script_option`); si no está se usa `atempo` (WSOLA)."""
+    global _RUBBERBAND_OK
+    if _RUBBERBAND_OK is None:
+        try:
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=20,
+                               **_flags())
+            _RUBBERBAND_OK = r.returncode == 0 and any(
+                line.split()[1:2] == ["rubberband"] for line in (r.stdout or "").splitlines())
+        except Exception:
+            _RUBBERBAND_OK = False
+    return _RUBBERBAND_OK
+
+
+def audio_max_rate() -> float:
+    """Velocidad máxima a la que el audio se OYE (config.json `preview_audio_max_rate`,
+    4.0 por defecto): el usuario debe escuchar lo que dicen a ×2–×4 para juzgar un
+    recorte; por encima (skim) va mudo, pero FFplay sigue consumiendo y dando reloj."""
+    try:
+        return max(1.0, float(hardware.load().get("preview_audio_max_rate", 4.0)))
+    except Exception:
+        return 4.0
+
+
+def filtro_velocidad(rate: float, *, rubberband: bool, max_rate: float) -> str:
+    """Cadena de filtros de audio para `rate` (vacía a ×1): estiramiento temporal que
+    conserva el tono y, por encima de `max_rate`, `volume=0`. Nunca vacía la salida:
+    FFplay siempre recibe audio (estirado) y sigue siendo el reloj maestro."""
+    rate = float(rate)
+    parts = []
+    if abs(rate - 1.0) > 1e-9:
+        if rubberband:
+            parts.append(f"rubberband=tempo={rate:g}:pitchq=quality:transients=smooth")
+        else:
+            parts.append(f"atempo={rate:g}")
+    if rate > max_rate + 1e-9:
+        parts.append("volume=0")
+    return ",".join(parts)
+
+
+def comando_mezcla(video, pistas_activas: list[int], t: float = 0.0, rate: float = 1.0, *,
+                   rubberband: bool = True, max_rate: float = 4.0) -> list[str]:
+    """La línea de ffmpeg que MEZCLA las pistas (amix) desde `t` como WAV por pipe,
+    estirada a `rate`. Pura: los tests la comparan sin lanzar nada. A ×1 es exactamente
+    la mezcla de siempre (sin filtro de velocidad)."""
+    mix = ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{max(0.0, t):.3f}",
+           "-i", str(video)]
+    speed = filtro_velocidad(rate, rubberband=rubberband, max_rate=max_rate)
+    if len(pistas_activas) == 1:
+        mix += ["-map", f"0:a:{pistas_activas[0]}"]
+        if speed:
+            mix += ["-af", speed]
+    else:
+        ins = "".join(f"[0:a:{i}]" for i in pistas_activas)
+        graph = f"{ins}amix=inputs={len(pistas_activas)}:normalize=1[mix]"
+        out = "[mix]"
+        if speed:
+            graph += f";[mix]{speed}[out]"
+            out = "[out]"
+        mix += ["-filter_complex", graph, "-map", out]
+    mix += ["-f", "wav", "-"]
+    return mix
+
+
 class Reproductor:
     """Audición de pistas con MUTE/SOLO real: si hay solos, suenan los solos no muteados;
     si no, todas las no muteadas. La mezcla la hace FFMPEG (amix) y la reproduce FFPLAY
@@ -981,27 +1083,27 @@ class Reproductor:
         self.clock = None
         self._reader = None
         self.error_tail = ""
+        self.rate = 1.0
+        self.mudo = False                      # audio silenciado por velocidad (skim)
 
-    def play(self, video, pistas_activas: list[int], t: float = 0.0) -> str | None:
-        """Reproduce las pistas (índices 0:a:N) desde `t`. Devuelve None si arrancó, o un
-        motivo si no se pudo."""
+    def play(self, video, pistas_activas: list[int], t: float = 0.0,
+             rate: float = 1.0) -> str | None:
+        """Reproduce las pistas (índices 0:a:N) desde `t` a la velocidad `rate` (el
+        audio se estira conservando el tono; por encima de `preview_audio_max_rate`
+        va mudo pero sigue dando reloj). Devuelve None si arrancó, o un motivo si no
+        se pudo."""
         self.stop()
         if not pistas_activas:
             return "no hay pistas activas (todo muteado)"
         if not ffplay_disponible():
             return "ffplay no está disponible en este equipo"
-        mix = ["ffmpeg", "-v", "error", "-nostdin", "-ss", f"{max(0.0, t):.3f}",
-               "-i", str(video)]
-        if len(pistas_activas) == 1:
-            mix += ["-map", f"0:a:{pistas_activas[0]}"]
-        else:
-            ins = "".join(f"[0:a:{i}]" for i in pistas_activas)
-            mix += ["-filter_complex",
-                    f"{ins}amix=inputs={len(pistas_activas)}:normalize=1[mix]",
-                    "-map", "[mix]"]
-        mix += ["-f", "wav", "-"]
+        max_rate = audio_max_rate()
+        rate = max(0.01, float(rate))
+        mix = comando_mezcla(video, pistas_activas, t, rate,
+                             rubberband=rubberband_disponible(), max_rate=max_rate)
+        self.rate, self.mudo = rate, rate > max_rate + 1e-9
         from playback_clock import AudioClock
-        clock = AudioClock(t)
+        clock = AudioClock(t, rate)
         with self._lock:
             pf = _popen(mix, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             try:

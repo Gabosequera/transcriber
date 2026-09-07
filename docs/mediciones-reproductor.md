@@ -48,10 +48,37 @@ recálculo. No se cambia ninguna metadata del pipeline. Los saltos nuevos siguen
 limitados por HEVC/seek. Probar menos threads, menor probesize o PCM en vez de WAV
 no redujo de forma consistente el primer frame: no se adoptaron esos cambios.
 
+## Velocidad de reproducción (2026-09-06, Fase 1 del diseño de navegación)
+
+Mismo VOD y equipo; `tools/benchmark_preview.py --rates 1,2,3,4,8 --seconds 20`
+(muestreo cada 5 ms, 20 s por posición, tres posiciones). Error = timestamp del
+frame presentado menos reloj de audio, en segundos de MEDIO: a ×N un intervalo de
+frame de pared (33 ms) vale N×33 ms de medio, así que el error escala con la
+velocidad aunque la presentación sea igual de puntual. `rubberband` conserva el
+tono hasta ×4; ×8 va mudo (`volume=0`) y FFplay sigue dando reloj.
+
+| Velocidad | Mediana | P95 abs. | Frames/s de pared | Respawns | Primer frame |
+|---|---:|---:|---:|---:|---:|
+| ×1 | −25 ms | 41 ms | 29,9 | 0 | 850–910 ms |
+| ×2 | −50 ms | 82 ms | 29,9 | 0 | 820–910 ms |
+| ×3 | −75 ms | 124 ms | 29,9 | 0 | 810–820 ms |
+| ×4 | −99 ms | 163 ms | 29,9 | 0 | 815 ms |
+| ×8 (skim, mudo) | −197 ms | 330 ms | 29,9 | 0 | 813–840 ms |
+
+El código anterior (commit `9db6171`) medido con el mismo script a ×1 da lo mismo
+(−24,5/−25,5/−24,9 ms de mediana; 41,2/41,9/41,2 ms de P95): sin regresión. La
+tabla histórica de arriba (34 ms de P95) usa muestreo de 3 s cada 20 ms.
+
+Cambio de velocidad durante la reproducción (tecla → primer frame de la sesión
+nuevа): 993–1053 ms, mediana 1,04 s = 150 ms de debounce + el primer frame de una
+sesión nueva. No cumple los ≤ 400 ms del diseño §5; es el mismo coste que un seek.
+
 ## Reproducir
 
 Ejecutar `tools/benchmark_preview.py --source <VOD> --output <resultado.json>` con el
-runtime de la app y FFmpeg/FFplay en PATH. `--baseline-dir` permite cargar copias de
+runtime de la app y FFmpeg/FFplay en PATH (`--rates 1,2,3,4,8 --seconds 60` para la
+medición por velocidad del diseño de navegación; `--baseline-dir` con copias de
+`medios.py`, `editor_medios.py` y `playback_clock.py` anteriores para comparar). `--baseline-dir` permite cargar copias de
 `editor_medios.py` y `medios.py` anteriores (se usó commit `483f489`), instrumentando
 solo stderr de FFplay sin cambiar su política de sincronización. El script abre y
 cierra una ventana Tk, reproduce tres posiciones, mide seeks y zoom, y genera JSON.

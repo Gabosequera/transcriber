@@ -61,6 +61,8 @@ TILES_LRU = 256                                # tiles cacheados (consenso r2 q.
 FCACHE_MB = 64                                 # presupuesto del caché de frames (r1.11)
 WARMUP_MAX_S = 10.0                            # al vencer se detiene; nunca audio sin video listo
 RADIO_PUNTO = 2.0                              # s — al convertir punto→región (regla `x`)
+SPEEDS = (1.0, 2.0, 3.0, 4.0, 8.0)             # velocidades de reproducción (diseño §1)
+RATE_DEBOUNCE_MS = 150                         # pulsar L tres veces seguidas = UNA re-sesión
 
 
 class EditorMedios:
@@ -87,6 +89,8 @@ class EditorMedios:
         self._frame_pil = None                 # frame ACTUAL en PIL (se re-escala al resize)
         self._frame_img = None                 # referencia viva del PhotoImage (si no, blanco)
         self.t_play = 0.0                      # el PLAYHEAD: un solo tiempo para audio+video
+        self.rate = 1.0                        # velocidad de reproducción (SPEEDS)
+        self._rate_after = None                # debounce del cambio de velocidad
         self._envs: dict[int, list] = {}       # envolventes GLOBALES por pista (fit)
         self._ancla = (0.0, 0.0)               # (t, reloj) del último play
         self._ph = None                        # item del playhead en el canvas del timeline
@@ -191,7 +195,8 @@ class EditorMedios:
             # escribirse en cualquier Entry sin disparar marcas — consenso q.4)
             for ks in ("Left", "Right", "Home", "End", "m", "i", "o", "x",
                        "Delete", "BackSpace", "plus", "equal", "minus",
-                       "KP_Add", "KP_Subtract", "z", "Z", "Escape"):
+                       "KP_Add", "KP_Subtract", "z", "Z", "Escape",
+                       "l", "L", "j", "J", "k", "K", "1", "2", "3", "4"):
                 c.bind(f"<Key-{ks}>", self._tl_key)
             c.bind("<Key-space>", lambda e: (self._play(), "break")[1])
 
@@ -413,7 +418,7 @@ class EditorMedios:
         re-apunta la ventana de prefetch con debounce."""
         dur = self.info["duracion"] if self.info else 0.0
         self.t_play = min(max(0.0, t), max(dur - 0.05, 0.0))
-        self.lbl_t.configure(text=f"{int(self.t_play // 60)}:{self.t_play % 60:04.1f}")
+        self.lbl_t.configure(text=self._texto_reloj())
         if self.on_playhead:
             self.on_playhead(self.t_play)
         if self._asegurar_visible(self.t_play):
@@ -436,6 +441,50 @@ class EditorMedios:
             self._t_pedido = self.t_play
             self.f.after(120, self._pedir_frame, self.t_play)
             self._reapuntar_prefetch()
+
+    def _texto_reloj(self) -> str:
+        """«0:12.3», y «0:12.3 ×2» cuando la velocidad no es la normal (diseño §1)."""
+        base = f"{int(self.t_play // 60)}:{self.t_play % 60:04.1f}"
+        return base if abs(self.rate - 1.0) < 1e-9 else f"{base} ×{self.rate:g}"
+
+    # ---- velocidad de reproducción (diseño docs/diseno-navegacion-editor.md §1) ----
+    def set_rate(self, rate):
+        """Fija la velocidad (una de SPEEDS). Pausado: la guarda y la muestra.
+        Reproduciendo: UNA re-sesión desde `t_play` con debounce de 150 ms (pulsar L
+        tres veces seguidas = un solo reinicio), por el mismo camino y token que
+        `_remezclar_debounced`."""
+        rate = min(SPEEDS, key=lambda s: abs(s - float(rate)))
+        if abs(rate - self.rate) < 1e-9:
+            return
+        self.rate = rate
+        self.lbl_t.configure(text=self._texto_reloj())
+        if not self._playback_activo():
+            self.status(f"velocidad ×{rate:g} (al reproducir)")
+            return
+        self._remix_n = getattr(self, "_remix_n", 0) + 1
+        n = self._remix_n
+        destino = self.t_play
+
+        def fire():
+            if n == self._remix_n and self._playback_activo():
+                self._play(reiniciar=True, desde=destino)
+        self.f.after(RATE_DEBOUNCE_MS, fire)
+
+    def _rate_step(self, delta: int):
+        """L (+1) / J (−1) sobre SPEEDS: pausado, L reproduce a ×1; a ×1, J pausa."""
+        if not self.info:
+            return
+        if delta > 0 and not self._playback_activo():
+            self.rate = 1.0
+            self._play()
+            return
+        i = SPEEDS.index(self.rate) if self.rate in SPEEDS else 0
+        j = i + delta
+        if j < 0:
+            if self._playback_activo():
+                self._play()                   # ×1 y J = pausa
+            return
+        self.set_rate(SPEEDS[min(j, len(SPEEDS) - 1)])
 
     def _pedir_frame(self, t):
         """Frame EXACTO del preview vía el WORKER único (último pedido gana, mata el
@@ -521,15 +570,15 @@ class EditorMedios:
         playhead actual y re-ancla; el stream de video y el tick vivos siguen. Mezcla
         vacía o ffplay caído → sesión entera abajo (nunca un stream sin dueño)."""
         pistas = self._activas()
-        motivo = self.repro.play(self.info["path"], pistas, self.t_play) if pistas \
-            else "no hay pistas activas (todo muteado)"
+        motivo = self.repro.play(self.info["path"], pistas, self.t_play, rate=self.rate) \
+            if pistas else "no hay pistas activas (todo muteado)"
         if motivo:
             self._stop_preview()
             self.btn_play.configure(text="▶")
             self.status(f"⚠ No puedo reproducir: {motivo}")
             return
         self._ancla = (self.t_play, time.monotonic())
-        self._play_metrics = dict(start=self.t_play,audio_clock_ms=None)
+        self._play_metrics = dict(start=self.t_play,rate=self.rate,audio_clock_ms=None)
 
     def _fcache_hit(self, t):
         """Frame prefeteado más cercano al playhead (±1 celda del grid) con las dims
@@ -862,6 +911,31 @@ class EditorMedios:
                 pass
         ks = e.keysym
         shift = bool(e.state & 0x1)
+        # velocidad (provisional hasta el keymap de la Fase 2): L/J/K/1-4, Shift+L skim
+        if ks in ("l", "L"):
+            if shift:
+                if not self._playback_activo():
+                    self.rate = SPEEDS[-1]
+                    self._play()
+                else:
+                    self.set_rate(SPEEDS[-1])
+            else:
+                self._rate_step(+1)
+            return "break"
+        if ks in ("j", "J"):
+            self._rate_step(-1)
+            return "break"
+        if ks in ("k", "K"):
+            if self._playback_activo():
+                self._play()
+            return "break"
+        if ks in ("1", "2", "3", "4"):
+            if self._playback_activo():
+                self.set_rate(float(ks))
+            else:
+                self.rate = float(ks)
+                self._play()
+            return "break"
         if ks in ("Left", "Right", "Home", "End"):
             paso = 5.0 if shift else 0.5
             t = {"Left": self.t_play - paso, "Right": self.t_play + paso,
@@ -1386,8 +1460,8 @@ class EditorMedios:
                 return
             ta = time.monotonic()
             pistas = self._activas()           # mute/solo DURANTE el warm-up vale (r3.5)
-            motivo = self.repro.play(self.info["path"], pistas, t0) if pistas \
-                else "no hay pistas activas (todo muteado)"
+            motivo = self.repro.play(self.info["path"], pistas, t0, rate=self.rate) \
+                if pistas else "no hay pistas activas (todo muteado)"
             if motivo:
                 self._stop_preview()
                 self.btn_play.configure(text="▶")
@@ -1396,14 +1470,17 @@ class EditorMedios:
             audio_ms = (time.monotonic() - ta) * 1000
             self._ancla = (t0, time.monotonic())
             pf = self._vses.primer_frame_s() if self._vses else None
-            self._play_metrics = dict(start=t0,first_frame_ms=round(pf*1000,1) if pf else None,
+            self._play_metrics = dict(start=t0,rate=self.rate,
+                                      first_frame_ms=round(pf*1000,1) if pf else None,
                                       audio_spawn_ms=round(audio_ms,1),audio_clock_ms=None)
             self.status(f"▶ {int(t0 // 60)}:{t0 % 60:04.1f} · pistas "
                         + ("+".join(str(p + 1) for p in pistas))
-                        + (f" · video {self._vses.fps:g}fps@{self._vses.w}px"
+                        + (f" · video {self._vses.fps * self._vses.rate:g}fps@{self._vses.w}px"
                            + (f", 1er frame {pf * 1000:.0f}ms" if pf is not None else "")
                            if self._vses else " · sin pista de video")
-                        + f" · audio spawn {audio_ms:.0f}ms")
+                        + f" · audio spawn {audio_ms:.0f}ms"
+                        + (f" · ×{self.rate:g}" if abs(self.rate - 1.0) > 1e-9 else "")
+                        + (" (audio mudo)" if self.repro.mudo else ""))
         # ---- fase playback ----
         if not self.repro.playing():
             self._stop_preview(audio=False)    # baja stream/prefetch; epoch nuevo
@@ -1436,7 +1513,7 @@ class EditorMedios:
                 pass
         if self.info and self.t_play >= self.info["duracion"]:
             self.repro.stop()
-        self.lbl_t.configure(text=f"{int(self.t_play // 60)}:{self.t_play % 60:04.1f}")
+        self.lbl_t.configure(text=self._texto_reloj())
         if self.on_playhead:
             self.on_playhead(self.t_play)
         if self._asegurar_visible(self.t_play):
@@ -1508,11 +1585,14 @@ class EditorMedios:
         return [self.info["pistas"][i]["idx"] for i, w in enumerate(self._pista_ui)
                 if not w["_mute"]]
 
-    def _play(self, reiniciar=False, desde=None):
+    def _play(self, reiniciar=False, desde=None, rate=None):
         """Play/stop de la sesión (diseño v2 B): arranca PRIMERO el stream de video
         continuo; el audio y el ancla se fijan en el warm-up de _anim_tick (al llegar
         el primer frame o al tope). `reiniciar` = seek durante playback (re-arma la
-        sesión desde `desde`); el mute/solo NO pasa por acá (usa _restart_audio)."""
+        sesión desde `desde`); el mute/solo NO pasa por acá (usa _restart_audio).
+        `rate` fija la velocidad de la sesión (si no, sigue `self.rate`)."""
+        if rate is not None:
+            self.rate = min(SPEEDS, key=lambda s: abs(s - float(rate)))
         if self._playback_activo() and not reiniciar:
             self.repro.stop()                  # stop del usuario: si el audio ya sonaba,
             if self._warmup is not None:       # el tick detecta y baja todo; en warm-up
@@ -1530,7 +1610,8 @@ class EditorMedios:
             W, H = self._dims_preview()
             try:
                 self._vses = medios.SesionVideo(self.info["path"], t, W, H,
-                                                info=self.info, log=self.status)
+                                                info=self.info, log=self.status,
+                                                rate=self.rate)
             except ValueError:
                 self._vses = None
         self._warmup = (t, time.monotonic())   # las pistas se leen AL arrancar el

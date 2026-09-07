@@ -7,8 +7,14 @@ STATUS = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s+(?:M-A|A-V):")
 
 
 class AudioClock:
-    def __init__(self, start=0):
+    """`rate` es la velocidad de reproducción: FFplay consume audio ya estirado
+    (atempo/rubberband), así que su reloj avanza en segundos de PARED; la posición
+    en el medio es `start + rate*(valor + transcurrido)`. El umbral de reloj perdido
+    (0,5 s) sigue midiéndose en segundos de pared, a cualquier velocidad."""
+
+    def __init__(self, start=0, rate=1.0):
         self.start=start
+        self.rate=float(rate)
         self.sample=None
         self.first_clock_s=None
         self.created=time.monotonic()
@@ -33,4 +39,4 @@ class AudioClock:
         elapsed=(time.monotonic() if now is None else now)-stamp
         if elapsed > .5:
             return None  # reloj perdido: nunca avanzar por una suposición
-        return self.start+max(0,value+max(0,elapsed))
+        return self.start+self.rate*max(0,value+max(0,elapsed))

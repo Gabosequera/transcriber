@@ -65,6 +65,9 @@ _DEFAULTS = {
     "automatico_panel_width": 292,
     # formato de salida al exportar cortes (clave de podcast_export.FORMATS)
     "export_format": "h264",
+    # velocidad máxima del preview a la que el audio sigue sonando (estirado con tono
+    # conservado). Por encima (el skim a ×8) se silencia, pero FFplay sigue dando reloj.
+    "preview_audio_max_rate": 4.0,
     # keys de APIs online: viven SOLO acá (config.json, por-máquina) — nunca en
     # presets, spec, manifests ni en el zip de ship.
     "openrouter_api_key": "",   # visión VLM + descripción de audio multi-vendor
