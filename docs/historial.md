@@ -609,3 +609,32 @@ de ambos carriles e ignora los desactivados; carril nuevo encima del seleccionad
 caja sin diálogo, borrar moviendo a «Recortes» y deshacerlo como UNA entrada;
 respuesta de dos capas `ai`; temas con dos niveles y persistir desde «Subtemas».
 121 tests. `VERSION` → 0.3.3 («prepara 0.3.3»).
+
+## 2026-09-07 — Barra de herramientas tipo NLE y menú contextual (0.3.4)
+
+Pedido de Gabriel: que las acciones de teclado tengan botones «físicos» con la
+descripción al pasar el mouse, y que todo lo que hace una tecla se pueda hacer
+también desde la barra o con click derecho. `toolbar_ui.py`: `Tooltip` (aparece
+tras 450 ms con etiqueta y atajo VIGENTE, leídos del keymap al mostrarse),
+`tool_button` y `build_menu` (todas las acciones disponibles agrupadas, cada una
+con su atajo como acelerador). `keymap.menu_groups/tooltip_text` son el modelo
+puro. El transporte del editor pasa a ser una barra: herramientas del dueño a la
+izquierda (`fr_tools`: Selección/Corte, deshacer, rehacer, dividir, recortar
+inicio/fin, aceptar, activar, borrar, añadir capa), transporte centrado (inicio,
+−0,5 s, −1 fotograma, play, +1 fotograma, +0,5 s, fin, velocidad: click sube,
+click derecho baja), reloj y ⋮ a la derecha; la etiqueta larga de atajos
+desaparece. Click derecho en el timeline o el preview (y ⋮) abre el mismo menú;
+sobre un item lo selecciona y pone primero editar, aceptar, activar, dividir,
+recortar, borrar, ir al inicio y reproducir desde aquí; sobre un carril vacío,
+«Añadir capa encima…». Marcar conserva su propio menú de metadata.
+
+Misma sesión, pedidos de Gabriel sobre la marcha: **A** = herramienta Selección (también
+V) y **B** = Corte, sin alternar, como en DaVinci; los estados dejan de ser toggles:
+**E** acepta, **X** desactiva, **P** activa (vuelve a propuesto; sobre un aceptado le
+quita la marca), y sobre varios items todos reciben el mismo estado. Propuesto y
+aceptado se cortan igual (aceptar es la marca de revisión humana): para que se
+distingan, el propuesto se pinta con relleno rayado y el aceptado sólido con borde
+verde y ✓. **D** también borra. Arreglado el subrayado blanco de la selección: al
+seleccionar (click o marquesina) se redibujaba el preview y no el timeline; y un click
+sin arrastre sobre un conjunto deja solo ese item. Tooltips y menú muestran los
+atajos en forma legible («Supr», «→», «.», «Espacio»). 122 tests, smoke completo.

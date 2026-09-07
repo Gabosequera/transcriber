@@ -310,13 +310,32 @@ class AutomaticWorkspace:
         # las marcas que escribe el editor (M, I/O, X, prompt, arrastre) entran al
         # historial de deshacer del proyecto (diseño §4)
         self.editor.transaccion = self.layers.transact
-        # barra de herramientas (§7) en la columna libre del transporte: Selección / Corte
+        # barra de herramientas (§7) a la izquierda del transporte, como en un NLE:
+        # Selección / Corte con tooltip (atajo vigente), botones de edición y capas
+        import toolbar_ui
+        import keymap
         self.tool_bar = ctk.CTkSegmentedButton(
-            self.editor.fr_transporte, values=["Selección", "Corte"], height=26,
+            self.editor.fr_tools, values=["Selección", "Corte"], height=28,
             font=ctk.CTkFont(size=11), command=self._tool_picked)
         self.tool_bar.set("Selección")
-        self.tool_bar.grid(row=0, column=4, padx=(10, 0), sticky="e")
+        self.tool_bar.grid(row=0, column=0, padx=(0, 8))
+        toolbar_ui.Tooltip(self.tool_bar, lambda: "Herramientas: " + keymap.tooltip_text("tools.select")
+                           + "  ·  " + keymap.tooltip_text("tools.cut"))
         self.layers.on_tool_change = lambda tool: self.tool_bar.set("Corte" if tool == "cut" else "Selección")
+        self.tool_buttons = {}
+        for col, (glyph, action) in enumerate((("↶", "edit.undo"), ("↷", "edit.redo"),
+                                                ("✂", "edit.split"), ("⇤", "edit.trim_start"),
+                                                ("⇥", "edit.trim_end"), ("✓", "edit.accept"),
+                                                ("◉", "edit.activate"), ("⊘", "edit.toggle"),
+                                                ("🗑", "edit.delete"),
+                                                ("＋", "layers.new_lane")), start=1):
+            button = toolbar_ui.tool_button(self.editor.fr_tools, glyph, action, self.editor.ejecutar, width=30)
+            button.grid(row=0, column=col, padx=1)
+            self.tool_buttons[action] = button
+        # el menú contextual del editor (click derecho y ⋮) muestra primero el item
+        # bajo el cursor y después todas las acciones que este dueño atiende
+        self.editor.menu_extra = self.layers.menu_items
+        self.editor.acciones_soportadas = self.layers.supported_actions
         # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
         # en la fila libre del editor (entre el timeline y el status) — nada de
         # escribirlo en el status, cuyo wrap movía timeline y preview con cada hover
@@ -327,7 +346,6 @@ class AutomaticWorkspace:
         # · click derecho = menú · click en MARCAS deselecciona
         self.editor.tl.bind("<Motion>", self.layers.hover, add=True)
         self.editor.tl.bind("<Leave>", self.layers.leave, add=True)
-        self.editor.tl.bind("<Button-3>", self.layers.menu, add=True)
 
         self._build_sash(body)
         self._panel_width = self._clamp_panel(hardware.load().get("automatico_panel_width"))

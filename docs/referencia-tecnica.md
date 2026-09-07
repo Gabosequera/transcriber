@@ -193,6 +193,22 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   `"break"` solo si se consumió. Click izquierdo en algo no interactivo del editor →
   `tl.focus_set()`. Ajustes → Atajos (`keymap_ui.KeymapSettings`): Grabar / × /
   Restaurar; guardar = `keymap.save()` + `reload()` y aplica al instante.
+- **Barra y menú contextual** (2026-09-07, 0.3.4): `toolbar_ui.py` (`Tooltip` con
+  retardo de 450 ms y texto evaluado al mostrarse; `tool_button`; `build_menu`) sobre el
+  modelo puro `keymap.menu_groups/tooltip_text`. `EditorMedios.fr_transporte` =
+  `fr_tools` del dueño (col. 0) · transporte centrado (`self.botones[id]`, `btn_play`,
+  `btn_rate`) · col. 4 libre para el dueño · `lbl_t` · `btn_menu`. `_menu_contextual`
+  (Button-3 en `tl` y `canvas`, y ⋮) construye el menú con `_acciones_disponibles()` =
+  handlers propios ∪ `acciones_soportadas()` del dueño, con `menu_extra(e, menu)` primero
+  (`LayersController.menu_items`: selecciona el item bajo el cursor y añade sus
+  entradas; `SUPPORTED_ACTIONS`). `editor.menu_contextual = False` lo apaga (Marcar
+  conserva `_meta_menu`). Todo botón y entrada llama a `editor.ejecutar(id)`: el mismo
+  despacho que la tecla, así que el historial y las guardas son idénticos.
+- **Estados explícitos** (2026-09-07, decisión de Gabriel): E = aceptado, X = desactivado,
+  P = propuesto (`editorial_edits.STATE_ACTIONS`/`state_for`); ninguna alterna y sobre
+  varios items todos reciben el mismo estado. Dibujo: propuesto con `stipple="gray50"`,
+  aceptado sólido con borde verde y ✓, desactivado vacío y punteado. A = herramienta
+  Selección (también V), B = Corte, sin toggle (`tools.select`, `tools.cut`).
 - **Navegación** (Fase 3): `editorial_nav.py` puro — `EdgeIndex` (tiempos únicos
   ordenados; `prev/next` = bisect, `nearest` = imán), `edge_times(layers)`,
   `silence_times(trims)`, `parse_goto`, `frame_step`. `LayersController.edges()` y

@@ -86,14 +86,12 @@ class EditArithmeticTests(unittest.TestCase):
         self.assertEqual(edits.range_at([dict(t_ini=1, t_fin=2), dict(t_ini=2, t_fin=4)], 2), 0)
         self.assertIsNone(edits.range_at([dict(t_ini=1, t_fin=2)], 5))
 
-    def test_state_toggles_single_and_batch(self):
-        self.assertEqual(edits.toggle_accept("proposed"), "accepted")
-        self.assertEqual(edits.toggle_accept("disabled"), "accepted")
-        self.assertEqual(edits.toggle_accept("accepted"), "proposed")
-        self.assertEqual(edits.batch_accept(["accepted", "accepted"]), "proposed")
-        self.assertEqual(edits.batch_accept(["accepted", "disabled"]), "accepted")
-        self.assertEqual(edits.batch_toggle(["disabled", "disabled"]), "proposed")
-        self.assertEqual(edits.batch_toggle(["disabled", "proposed"]), "disabled")
+    def test_state_actions_are_explicit_not_toggles(self):
+        self.assertEqual(edits.state_for("edit.accept"), "accepted")
+        self.assertEqual(edits.state_for("edit.toggle"), "disabled")
+        self.assertEqual(edits.state_for("edit.activate"), "proposed")
+        with self.assertRaises(ValueError):
+            edits.state_for("edit.split")
 
     def test_split_layer_item_keeps_metadata_and_orders_next_item(self):
         layer = layers.new_layer(master_fixture(), "Pedidos")

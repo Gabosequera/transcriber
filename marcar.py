@@ -249,6 +249,7 @@ class TabMarcar:
         # seek vía el _scrub del editor — no hay binding extra que duplique eso)
         self.ed.tl.bind("<Motion>", self._meta_hover, add=True)
         self.ed.tl.bind("<Button-3>", self._meta_menu, add=True)
+        self.ed.menu_contextual = False        # Marcar tiene su propio menú de metadata
         self._tt_items = []
 
         der = ctk.CTkFrame(self.pw)

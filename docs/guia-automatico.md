@@ -91,14 +91,14 @@ editaste, lo que creaste y los que desactivaste.
 ### Trabajar en el carril
 
 Hay dos herramientas, como en un editor de video, en la barra junto al transporte:
-**Selección** (`V`, la predeterminada) y **Corte** (`B` entra y, pulsada otra vez, vuelve
-a Selección). El cursor cambia al pasar por un carril: flecha en vacío, mano de mover
+**Selección** (`A`, también `V`; la predeterminada) y **Corte** (`B`), como en DaVinci: cada
+tecla lleva a su herramienta, sin alternar. El cursor cambia al pasar por un carril: flecha en vacío, mano de mover
 sobre el cuerpo, doble flecha a menos de 8 px de un borde (en items estrechos, un
 tercio del ancho), cruz con la herramienta Corte.
 
 | Acción | Cómo |
 |---|---|
-| Seleccionar | Click sobre el item (borde blanco y handles); `Shift` + click añade o quita del conjunto |
+| Seleccionar | Click sobre el item (borde blanco y handles); `Shift` + click añade o quita del conjunto; un click sin arrastre sobre un conjunto deja solo ese item |
 | Seleccionar varios | Arrastrar desde vacío: marquesina (si cubre varios carriles se elige el que tiene más items); `Ctrl` + `A` selecciona todo el carril |
 | Mover | Arrastrar el cuerpo: se mueve todo el conjunto seleccionado el mismo tiempo, con previsualización, en un solo guardado |
 | Estirar o encoger | Arrastrar un borde de cualquier item (seleccionado o no): el otro borde no se mueve y una etiqueta muestra el nuevo tiempo y el delta |
@@ -106,19 +106,25 @@ tercio del ancho), cruz con la herramienta Corte.
 | Estirar o fundir con una caja | Herramienta Corte: una caja que pisa uno o varios items los estira a la unión o los funde en uno (los motivos se juntan con « · ») |
 | Restar | Herramienta Corte + `Shift`: la caja borra lo que cubre entero, recorta el borde que toca o divide en dos lo que atraviesa |
 | Mover con Corte | `Ctrl` + arrastrar desde un item; `Ctrl` + arrastrar en vacío mueve el playhead |
-| Activar / desactivar | `X` (sobre varios: todos a la vez) o menú contextual |
-| Aceptar | `A` (borde verde; sobre varios: todos a la vez) |
+| Desactivar / activar | `X` / `P` (sobre varios: todos a la vez) o menú contextual |
+| Aceptar | `E` (borde verde y ✓; sobre varios: todos a la vez) |
 | Mover el conjunto con el teclado | Con dos o más seleccionados, `←` / `→` (±1 fotograma; `Shift` ±10) |
 | Editar comentario y rangos | Doble click o `Enter` |
-| Borrar | `Supr` / `Retroceso` (sobre varios: todos, una sola entrada de deshacer) |
+| Borrar | `Supr`, `Retroceso` o `D` (sobre varios: todos, una sola entrada de deshacer) |
 | Deseleccionar | `Esc` |
 | Ver el motivo | Pasar el mouse por encima (tooltip y barra de detalle) |
-| Menú contextual | Click derecho: editar, activar/desactivar, borrar, ir al inicio |
+| Menú contextual | Click derecho: editar, aceptar, activar, desactivar, dividir, recortar, borrar, ir al inicio, reproducir desde aquí, y todas las demás acciones por grupo |
 
 Los recortes que se solapan dentro del mismo carril y con el mismo estado (activo o
 desactivado) se funden en uno solo al guardar; los que solo se tocan por el borde siguen
 separados. Un solape entre un activo y uno desactivado se deja como está, porque
 fundirlos cambiaría lo que se exporta.
+
+**Tres estados, dos que se cortan.** *Propuesto* (relleno rayado) y *aceptado* (relleno sólido, borde
+verde y ✓) se cortan igual al exportar: aceptar es solo tu marca de «ya lo revisé», y sirve para que
+la AI no vuelva a proponer sobre ese tramo. *Desactivado* (vacío y punteado) no se corta. Las
+teclas son explícitas, no alternan: `E` acepta, `X` desactiva, `P` activa (deja el item en
+propuesto; sobre un aceptado, le quita la marca).
 
 Ayudas visuales: color por origen, borde blanco en la selección y contorno punteado
 para items desactivados. Con muchos recortes se agrupan marcas indistinguibles por
@@ -349,6 +355,17 @@ y ajustan sus vecinos al cambiar un borde; dividir el plan usa **Revisar chunks*
 Las marcas envuelven el Registro compartido y los recortes mantienen `trims.json`:
 no hay dos copias editables. **Preparar capas para AI** publica `views/layers.json`.
 
+Todo lo que hace una tecla también se hace con el mouse. La barra sobre el timeline tiene,
+a la izquierda, las herramientas (Selección / Corte, deshacer, rehacer, dividir, recortar
+inicio y fin, aceptar, activar/desactivar, borrar, añadir capa); en el centro, el
+transporte (inicio, −0,5 s, −1 fotograma, play, +1 fotograma, +0,5 s, fin y la velocidad:
+click sube, click derecho baja); a la derecha, el reloj y el botón ⋮ con todas las
+acciones. Al dejar el mouse sobre un botón aparece su descripción con el atajo actual.
+Click derecho en el timeline o en el preview abre el mismo menú: sobre un item lo
+selecciona y muestra primero sus acciones (editar, aceptar, activar, dividir, recortar,
+borrar, ir al inicio, reproducir desde aquí); sobre un carril vacío, «Añadir capa
+encima…». Cada entrada muestra su atajo.
+
 Las teclas funcionan con el foco en el timeline o en el preview (un click en cualquier
 parte no interactiva del editor lo da); dentro de un campo de texto se escribe normal.
 Todos los atajos se cambian en **Ajustes → Atajos** (Grabar captura la siguiente tecla,
@@ -391,10 +408,11 @@ Edición sobre el item seleccionado (todo se guarda al momento y se puede deshac
 | `[` / `]` | Recortar el inicio / el fin del tramo al playhead |
 | `Alt` + `←` / `→`, con `Shift` | Empujar ±1 / ±10 fotogramas (el playhead sigue al item) |
 | `Tab` / `Shift` + `Tab` | Item siguiente / anterior del carril (el playhead va a su inicio) |
-| `A` | Aceptar / quitar aceptación (un recorte aceptado lleva borde verde; la exportación no cambia) |
-| `Shift` + `A` | Aceptar y pasar al siguiente: revisar una lista de silencios sin soltar el teclado |
-| `X` | Activar / desactivar |
-| `Supr`, `Enter`/`F2`, `Esc` | Borrar, editar, deseleccionar |
+| `E` | Aceptar: marca de «ya lo revisé» (borde verde y ✓). Se corta igual que un propuesto; la AI no vuelve a proponer sobre él |
+| `Shift` + `E` | Aceptar y pasar al siguiente: revisar una lista de silencios sin soltar el teclado |
+| `X` | Desactivar: no se corta (vacío y punteado). Pulsarlo otra vez no lo reactiva |
+| `P` | Activar: vuelve a propuesto (relleno rayado; se corta). Sobre un aceptado le quita la marca |
+| `Supr` / `D`, `Enter`/`F2`, `Esc` | Borrar, editar, deseleccionar |
 | `Ctrl` + `Z` / `Ctrl` + `R` (o `Ctrl` + `Shift` + `Z`, `Ctrl` + `Y`) | Deshacer / rehacer cualquier cambio del timeline: items, pedidos, marcas, capas, análisis de silencios e importaciones de la AI. Si un archivo cambió por fuera (la AI escribió mientras tanto) esa entrada se descarta con aviso en vez de pisar. Dentro de un campo de texto, `Ctrl+Z` deshace solo el texto |
 
 **Velocidad.** Hasta ×4 se oye lo que dicen, solo más rápido y con el tono conservado

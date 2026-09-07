@@ -268,7 +268,7 @@ def main():
         before_next = controller.selected
         assert ed.ejecutar("edit.accept_next")
         moved = next(c for c in workspace.trims["cuts"] if c["cut_id"] == moved["cut_id"])
-        assert not moved["accepted"] and controller.selected != before_next
+        assert moved["accepted"] and controller.selected != before_next          # E no alterna
         n_ops = len(history)
         item = layers.new_item(0.5, 1.5, comment="")
         controller.persist(nueva["layer_id"], item, create=True)
@@ -348,13 +348,25 @@ def main():
         # marquesina sobre los tres → X → los tres desactivados con UNA revisión nueva
         drag("trims:main", x_of(.8), x_of(3.7), ya=lane_y("trims:main") - 8, yb=lane_y("trims:main") + 8)
         assert [k[1] for k in controller.selection] == ids, controller.selection
+        def white_handles():
+            return [i for i in ed.tl.find_all() if ed.tl.type(i) == "line" and ed.tl.itemcget(i, "fill") == "white"
+                    and str(ed.tl.itemcget(i, "width")) in ("3", "3.0")]
+        assert len(white_handles()) == 6, len(white_handles())                    # 3 items × 2 handles, sin redibujar aparte
+        mouse("press", "trims:main", x_of(1.25)); mouse("release", "trims:main", x_of(1.25))
+        assert len(controller.selection) == 1 and len(white_handles()) == 2
+        controller.clear_selection(); ed._dibujar_timeline(); assert not white_handles()
+        drag("trims:main", x_of(.8), x_of(3.7), ya=lane_y("trims:main") - 8, yb=lane_y("trims:main") + 8)
         assert controller.selected[1] == ids[-1]
         rev = workspace.trims["revision"]
         assert ed._key_toplevel(ev(ed.tl, "x")) == "break"
         assert all(not c["enabled"] for c in workspace.trims["cuts"]) and workspace.trims["revision"] == rev + 1
         assert editorial_io.read_json(trims_path)["revision"] == rev + 1 and len(history) == 1
-        assert ed._key_toplevel(ev(ed.tl, "x")) == "break" and all(c["enabled"] for c in workspace.trims["cuts"])
-        assert ed._key_toplevel(ev(ed.tl, "a")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "x")) == "break" and not any(c["enabled"] for c in workspace.trims["cuts"])  # X no alterna
+        assert ed._key_toplevel(ev(ed.tl, "p")) == "break" and all(c["enabled"] and not c["accepted"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "e")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "e")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "p")) == "break" and not any(c["accepted"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "e")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
         # arrastre del conjunto desde un item seleccionado → un solo guardado, todos se mueven igual
         rev = workspace.trims["revision"]
         drag("trims:main", x_of(2.25), x_of(2.25 + 1.0))
@@ -404,6 +416,9 @@ def main():
         assert abs(moved_tiny["t_ini"] - (6.0 + 30 / pxseg)) < .02, moved_tiny["t_ini"]
         assert abs((moved_tiny["t_fin"] - moved_tiny["t_ini"]) - 15 / pxseg) < 1e-3
         # herramienta Corte (B): caja que pisa dos recortes → queda uno; Shift+caja dentro → dos con accepted
+        assert ed._key_toplevel(ev(ed.tl, "b")) == "break" and controller.tool == "cut"
+        assert ed._key_toplevel(ev(ed.tl, "b")) == "break" and controller.tool == "cut"   # B no alterna
+        assert ed._key_toplevel(ev(ed.tl, "a")) == "break" and controller.tool == "select"
         assert ed._key_toplevel(ev(ed.tl, "b")) == "break" and controller.tool == "cut"
         assert workspace.tool_bar.get() == "Corte"
         n_before = len(workspace.trims["cuts"])
@@ -511,7 +526,7 @@ def main():
         assert len(history) == 1 and history.peek_undo().label == "importar recortes de la AI"
         # A acepta el corte de la AI; X desactiva el segundo si el ajuste de bordes dejó dos
         controller.select([("trims:ai", ai_ids[0], 0)])
-        assert ed._key_toplevel(ev(ed.tl, "a")) == "break"
+        assert ed._key_toplevel(ev(ed.tl, "e")) == "break"
         if len(ai_ids) > 1:
             controller.select([("trims:ai", ai_ids[1], 0)])
             assert ed._key_toplevel(ev(ed.tl, "x")) == "break"
@@ -611,6 +626,41 @@ def main():
         assert "Tarea 3" in text and "aceptados" in text and (views / "topics-agent-request.md").is_file()
         assert (views / "trim-agent-request.md").is_file()
         controller.clear_selection()
+        # ---- barra de herramientas y menú contextual: todo lo de las teclas, con el mouse ----
+        import tkinter as _tk
+        ed._set_playhead(1.0)
+        ed.botones["nav.frame_next"].invoke()
+        assert abs(ed.t_play - (1.0 + 1 / fps)) < 1e-6, ed.t_play
+        ed.botones["nav.home"].invoke(); assert ed.t_play == 0
+        tip = ed.botones["nav.frame_next"].tooltip
+        assert tip.current_text().endswith("  ·  ."), tip.current_text()          # etiqueta · atajo vigente
+        tip.show(); app.update(); assert tip._win is not None and tip._win.winfo_exists()
+        tip.hide(); assert tip._win is None
+        assert workspace.tool_buttons["edit.undo"].tooltip.current_text().endswith("Ctrl+Z")
+        assert ed.btn_rate.cget("text") == "×1"
+        cut0 = workspace.trims["cuts"][0]
+        controller.select([("trims:main", cut0["cut_id"], 0)])
+        workspace.tool_buttons["edit.toggle"].invoke()
+        assert not next(c for c in workspace.trims["cuts"] if c["cut_id"] == cut0["cut_id"])["enabled"]
+        workspace.tool_buttons["edit.undo"].invoke()
+        assert next(c for c in workspace.trims["cuts"] if c["cut_id"] == cut0["cut_id"])["enabled"]
+        # menú contextual sobre un item: entradas del item primero, después los grupos con aceleradores
+        controller.clear_selection()
+        cx = x_of((cut0["t_ini"] + cut0["t_fin"]) / 2)
+        menu = ed._construir_menu(NS(x=cx, y=lane_y("trims:main"), x_root=0, y_root=0))
+        assert isinstance(menu, _tk.Menu)
+        labels = [menu.entrycget(i, "label") for i in range(menu.index("end") + 1) if menu.type(i) != "separator"]
+        assert "Editar comentario y rangos" in labels and "Transporte" in labels and "Edición" in labels, labels
+        borrar = next(i for i in range(menu.index("end") + 1) if menu.type(i) != "separator" and menu.entrycget(i, "label") == "Borrar")
+        assert menu.entrycget(borrar, "accelerator").startswith("Supr") and "D" in menu.entrycget(borrar, "accelerator").split(" · ")
+        assert controller.selected[1] == cut0["cut_id"]                    # el click derecho lo seleccionó
+        assert controller.supported_actions() and "edit.split" in ed._acciones_disponibles()
+        menu.destroy()
+        # sin item bajo el cursor: solo los grupos; en el preview también hay menú
+        empty = ed._construir_menu(NS(x=x_of(7.9), y=lane_y("trims:main"), x_root=0, y_root=0))
+        elabels = [empty.entrycget(i, "label") for i in range(empty.index("end") + 1) if empty.type(i) != "separator"]
+        assert "Añadir capa encima…" in elabels and "Editar comentario y rangos" not in elabels, elabels
+        empty.destroy()
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

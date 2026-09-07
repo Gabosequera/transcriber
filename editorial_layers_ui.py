@@ -59,7 +59,7 @@ class LayerDetailBar:
     STATES = {"proposed": ("PROPUESTO", "#c9974e"), "accepted": ("ACEPTADO", "#35a978"),
               "disabled": ("DESACTIVADO", "#8b9790")}
     ORIGINS = {"silence": "#527cad", "ai": "#9471bd", "user": "#c58e43"}
-    HINT = "doble click edita · X activa/desactiva · Supr borra"
+    HINT = "doble click edita · E acepta · X activa/desactiva · Supr borra · click derecho: todo"
     EMPTY = ("Capas · pasa el mouse por un item del timeline para ver su detalle · "
              "arrastra en un carril para crear uno")
 
@@ -386,15 +386,23 @@ class LayersController:
                         continue
                     occupied.add(key)
                 accepted = item["state"] == "accepted"
+                # propuesto = relleno rayado (pendiente de revisar); aceptado = sólido con
+                # borde verde y ✓ (revisado por la persona); desactivado = vacío y punteado.
+                # Propuesto y aceptado se CORTAN igual: aceptar es solo la marca de revisión.
                 canvas.create_rectangle(a, y + 12, b, y + 31,
                     fill=color if item["state"] != "disabled" else "",
+                    stipple="gray50" if item["state"] == "proposed" else "",
                     outline="#ffffff" if selected else "#35a978" if accepted else color,
                     width=2 if selected or accepted else 1,
                     dash=(3, 2) if item["state"] == "disabled" else ())
                 if b - a > 45:
                     canvas.create_text(a + 4, y + 21, anchor="w", fill="#ffffff",
-                        text=("↳ " if item.get("parent_id") else "") + item["label"][:int((b-a)/7)],
+                        text=("✓ " if accepted else "") + ("↳ " if item.get("parent_id") else "")
+                             + item["label"][:int((b-a)/7)],
                         font=("TkDefaultFont", 8))
+                elif accepted and b - a > 12:
+                    canvas.create_text((a + b) / 2, y + 21, fill="#ffffff", text="✓",
+                                       font=("TkDefaultFont", 8, "bold"))
                 if selected:
                     for x in (a, b):
                         canvas.create_line(x, y + 11, x, y + 32, fill="white", width=3)
@@ -410,6 +418,11 @@ class LayersController:
     CLICK_PX = 4           # menos que esto es un click, no un arrastre
     TOOLS = ("select", "cut")
 
+    def _redraw(self):
+        """Selección, hover y herramienta cambian: redibujar el TIMELINE (el borde
+        blanco vive ahí), no el preview."""
+        self.w.editor._dibujar_timeline()
+
     def set_tool(self, tool):
         if tool not in self.TOOLS:
             raise ValueError(tool)
@@ -422,8 +435,8 @@ class LayersController:
                     self.on_tool_change(tool)
                 except Exception:
                     pass
-        self.w.editor.status("Herramienta: " + ("Corte (arrastra una caja; Shift resta; Ctrl mueve)"
-                                                if tool == "cut" else "Selección"))
+        self.w.editor.status("Herramienta: " + ("Corte (B): arrastra una caja; Shift resta; Ctrl mueve"
+                                                if tool == "cut" else "Selección (A)"))
 
     def _set_cursor(self, cursor):
         """El cursor del canvas cambia SOLO cuando cambia el estado, nunca por evento."""
@@ -526,7 +539,7 @@ class LayersController:
             return True
         layer, _ = self.find(lid)
         self.select([(lid, i["item_id"], 0) for i in layer["items"]])
-        self.w.editor.redibujar()
+        self._redraw()
         self.sync_detail()
         self.w.editor.status(f"{len(self.selection)} items seleccionados en «{layer['name']}»")
         return True
@@ -597,7 +610,7 @@ class LayersController:
             self.clear_selection(lid)
             self.drag = dict(kind="marquee", lid=lid, y=y, t0=t, t1=t, x0=e.x, x1=e.x,
                              y0=e.y, y1=e.y)
-        editor.redibujar()
+        self._redraw()
         self.sync_detail()
         return True
 
@@ -683,6 +696,10 @@ class LayersController:
                     items.append(item)
                 n = len(items)
                 self.persist_many(d["lid"], items, label=f"mover {n} item(s)" if n > 1 else "mover item")
+            elif d["kind"] == "move" and not moved and self.selected and len(self.selection) > 1:
+                # click sin arrastre sobre un item del conjunto: se queda solo ese (un
+                # arrastre habría movido el conjunto entero)
+                self.select([self.selected])
             elif d["kind"] == "edge" and moved:
                 lid, iid, index = d["key"]
                 _, item = self.find(lid, iid)
@@ -691,7 +708,7 @@ class LayersController:
                 self.selected = (lid, iid, index)
         except Exception as error:
             editor.status(f"⚠ no se guardó: {error}")
-        editor.redibujar()
+        self._redraw()
         self.sync_detail()
         return True
 
@@ -1134,13 +1151,10 @@ class LayersController:
             self.persist_many(lid, [i for _, i, _ in items], delete=True,
                               label=f"borrar {len(items)} items")
             return True
-        states = [i["state"] for _, i, _ in items]
-        new = edits.batch_toggle(states) if action == "edit.toggle" else edits.batch_accept(states)
+        new = edits.state_for(action)
         for _, item, _ in items:
             item["state"] = new
         verb = {"disabled": "desactivar", "accepted": "aceptar", "proposed": "activar"}[new]
-        if action == "edit.accept" and new == "proposed":
-            verb = "quitar aceptación a"
         self.persist_many(lid, [i for _, i, _ in items], label=f"{verb} {len(items)} items")
         return True
 
@@ -1335,7 +1349,7 @@ class LayersController:
             return True
         self.selected = (lid, item["item_id"], 0)
         self.w.editor._mover_playhead(min(r["t_ini"] for r in item["ranges"]))
-        self.w.editor.redibujar()
+        self._redraw()
         self.sync_detail()
         return True
 
@@ -1345,8 +1359,9 @@ class LayersController:
         lid, layer, item, segment = self._selected_item()
         if lid == "bloques":
             raise ValueError("los bloques no tienen aceptación")
-        item["state"] = edits.toggle_accept(item["state"])
-        self.persist(lid, item, label="aceptar" if item["state"] == "accepted" else "quitar aceptación")
+        if item["state"] != "accepted":
+            item["state"] = "accepted"
+            self.persist(lid, item, label="aceptar")
         if then_next:
             self.step_item(+1)
         return True
@@ -1405,8 +1420,8 @@ class LayersController:
             return self.undo()
         if action == "edit.redo":
             return self.undo(redo=True)
-        if action == "tools.toggle_cut":
-            self.set_tool("select" if self.tool == "cut" else "cut")
+        if action == "tools.cut":
+            self.set_tool("cut")
             return True
         if action == "tools.select":
             self.set_tool("select")
@@ -1416,7 +1431,7 @@ class LayersController:
         if action == "layers.new_lane":
             return self.new_lane_dialog()
         multi = len(self.selection) > 1
-        if multi and action in ("edit.toggle", "edit.accept", "edit.delete"):
+        if multi and action in ("edit.toggle", "edit.activate", "edit.accept", "edit.delete"):
             try:
                 return self.batch(action)
             except Exception as error:
@@ -1439,7 +1454,7 @@ class LayersController:
                 return True
         if action == "edit.deselect" and self.selection:
             self.clear_selection(self.selected[0] if self.selected else None)
-            editor.redibujar()
+            self._redraw()
             self.sync_detail()
             return True
         editing = {"edit.split": self.split,
@@ -1491,15 +1506,18 @@ class LayersController:
         try:
             if action == "edit.delete":
                 self.persist(lid, item, delete=True)
-            elif action == "edit.toggle":
-                item["state"] = "proposed" if item["state"] == "disabled" else "disabled"
-                self.persist(lid, item, label="desactivar item" if item["state"] == "disabled"
-                             else "activar item")
+            elif action in ("edit.toggle", "edit.activate"):
+                new = edits.state_for(action)
+                if lid == "bloques" and new == "disabled":
+                    raise ValueError("los bloques no se desactivan (cobertura continua)")
+                if item["state"] != new:
+                    item["state"] = new
+                    self.persist(lid, item, label="desactivar item" if new == "disabled" else "activar item")
             elif action == "edit.edit":
                 self.edit_dialog()
             elif action == "edit.deselect":
                 self.clear_selection()
-                self.w.editor.redibujar()
+                self._redraw()
                 self.sync_detail()
             else:
                 return False
@@ -1593,26 +1611,68 @@ class LayersController:
                     canvas.tag_lower(bg, text)
         self.sync_detail(hovered)
 
-    def menu(self, e):
-        hit = self.w.editor._carril_en(e.y)
-        g = self.w.editor._tl_geo()
+    # acciones del keymap que este dueño atiende (para el menú contextual y la barra)
+    SUPPORTED_ACTIONS = frozenset({
+        "edit.undo", "edit.redo", "edit.split", "edit.trim_start", "edit.trim_end",
+        "edit.nudge_prev", "edit.nudge_next", "edit.nudge_prev_10", "edit.nudge_next_10",
+        "edit.item_prev", "edit.item_next", "edit.accept", "edit.accept_next", "edit.toggle", "edit.activate",
+        "edit.delete", "edit.edit", "edit.deselect", "tools.cut", "tools.select",
+        "tools.select_all", "layers.new_lane", "nav.prev_edge", "nav.next_edge",
+        "nav.prev_silence", "nav.next_silence", "nav.sel_start", "nav.sel_end", "view.zoom_sel",
+        "view.skip_trims", "transport.play_from_item"})
+
+    def supported_actions(self):
+        return self.SUPPORTED_ACTIONS if self.store else frozenset()
+
+    def menu_items(self, e, menu):
+        """Hook `menu_extra` del editor: click derecho sobre un item lo selecciona y
+        añade sus entradas al principio del menú contextual. True si añadió algo."""
+        editor = self.w.editor
+        hit = editor._carril_en(e.y) if e is not None else None
+        g = editor._tl_geo()
         if not hit or not g or not self.store:
-            return
-        item_hit = self.hit(hit[0]["nombre"], e.x, g)
+            return False
+        lid = hit[0]["nombre"]
+        item_hit = self.hit(lid, e.x, g)
+        layer, _ = self.find(lid)
         if not item_hit:
-            return
-        key = (hit[0]["nombre"], item_hit[0]["item_id"], item_hit[1])
+            menu.add_command(label=f"Carril «{layer['name']}»", state="disabled")
+            menu.add_command(label="Añadir capa encima…", accelerator=self._chord("layers.new_lane"),
+                             command=lambda: (self.clear_selection(lid), self.new_lane_dialog()))
+            return True
+        key = (lid, item_hit[0]["item_id"], item_hit[1])
         if key not in self.selection:
             self.select([key])
         else:
             self.selected = key
+        self._redraw()
         self.sync_detail()
-        menu = tk.Menu(self.w.editor.tl, tearoff=False)
-        menu.add_command(label="Editar comentario y rangos", command=self.edit_dialog)
-        for label, action in (("Activar / desactivar", "edit.toggle"), ("Borrar item", "edit.delete")):
-            menu.add_command(label=label, command=lambda a=action: self.action(a))
-        menu.add_command(label="Ir al inicio", command=lambda: self.w.editor._set_playhead(item_hit[0]["ranges"][item_hit[1]]["t_ini"]))
-        menu.tk_popup(e.x_root, e.y_root)
+        item = item_hit[0]
+        many = len(self.selection) > 1
+        menu.add_command(label=(f"{len(self.selection)} items seleccionados" if many
+                                else f"{layer['name']} · {item['label']}"), state="disabled")
+        menu.add_command(label="Editar comentario y rangos", accelerator=self._chord("edit.edit"),
+                         command=self.edit_dialog)
+        for label, action in (("Aceptar (revisado; se corta)", "edit.accept"),
+                              ("Activar (propuesto; se corta)", "edit.activate"),
+                              ("Desactivar (no se corta)", "edit.toggle"),
+                              ("Dividir en el playhead", "edit.split"),
+                              ("Recortar inicio al playhead", "edit.trim_start"),
+                              ("Recortar fin al playhead", "edit.trim_end"),
+                              ("Borrar", "edit.delete")):
+            menu.add_command(label=label, accelerator=self._chord(action),
+                             command=lambda a=action: editor.ejecutar(a))
+        start = item["ranges"][item_hit[1]]["t_ini"]
+        menu.add_command(label="Ir al inicio", accelerator=self._chord("nav.sel_start"),
+                         command=lambda: editor._mover_playhead(start))
+        menu.add_command(label="Reproducir desde aquí", accelerator=self._chord("transport.play_from_item"),
+                         command=lambda: editor._play(reiniciar=True, desde=start))
+        return True
+
+    @staticmethod
+    def _chord(action):
+        import keymap
+        return keymap.pretty_chords(action)
 
     def edit_dialog(self, focus=None):
         """Diálogo del item. `focus="comment"`: el cursor queda en el campo del pedido

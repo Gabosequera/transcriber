@@ -182,17 +182,18 @@ _register("edit.nudge_prev_10", "Empujar 10 fotogramas atrás", "Edición", "Alt
 _register("edit.nudge_next_10", "Empujar 10 fotogramas adelante", "Edición", "Alt+Shift+Right")
 _register("edit.item_prev", "Item anterior del carril", "Edición", "Shift+Tab")
 _register("edit.item_next", "Item siguiente del carril", "Edición", "Tab")
-_register("edit.accept", "Aceptar / quitar aceptación", "Edición", "A")
-_register("edit.accept_next", "Aceptar y pasar al siguiente", "Edición", "Shift+A")
-_register("edit.toggle", "Activar / desactivar (o ciclar la decisión de la marca)", "Edición", "X")
-_register("edit.delete", "Borrar", "Edición", "Delete", "BackSpace")
+_register("edit.accept", "Aceptar (marca de revisión: se corta igual que un propuesto)", "Edición", "E")
+_register("edit.accept_next", "Aceptar y pasar al siguiente", "Edición", "Shift+E")
+_register("edit.toggle", "Desactivar (no se corta; en una marca cicla la decisión)", "Edición", "X")
+_register("edit.activate", "Activar: vuelve a propuesto (se corta)", "Edición", "P")
+_register("edit.delete", "Borrar", "Edición", "Delete", "BackSpace", "D")
 _register("edit.edit", "Editar", "Edición", "Return", "F2")
 _register("edit.deselect", "Deseleccionar", "Edición", "Escape")
 _register("edit.undo", "Deshacer", "Edición", "Ctrl+Z")
 _register("edit.redo", "Rehacer", "Edición", "Ctrl+R", "Ctrl+Shift+Z", "Ctrl+Y")
 
-_register("tools.toggle_cut", "Alternar herramienta Selección ↔ Corte", "Herramientas", "B")
-_register("tools.select", "Volver a Selección", "Herramientas", "V")
+_register("tools.select", "Herramienta Selección", "Herramientas", "A", "V")
+_register("tools.cut", "Herramienta Corte", "Herramientas", "B")
 _register("tools.select_all", "Seleccionar todo el carril", "Herramientas", "Ctrl+A")
 _register("layers.new_lane", "Añadir capa…", "Herramientas", "Ctrl+N")
 
@@ -357,3 +358,47 @@ def reload(path: str | Path | None = None) -> Keymap:
 def resolve_event(keysym: str, state: int) -> str | None:
     """Atajo de UN evento Tk → id de acción (o None). Un lookup por tecla."""
     return current().resolve(chord_from_event(keysym, state))
+
+
+# ---- menú / barra: el mismo inventario, para botones y click derecho ----
+_PRETTY = {"period": ".", "comma": ",", "bracketleft": "[", "bracketright": "]", "plus": "+",
+           "minus": "-", "equal": "=", "space": "Espacio", "Delete": "Supr", "BackSpace": "Retroceso",
+           "Return": "Enter", "Escape": "Esc", "Left": "←", "Right": "→", "Up": "↑", "Down": "↓",
+           "Home": "Inicio", "End": "Fin", "KP_Add": "Num +", "KP_Subtract": "Num −", "Prior": "RePág",
+           "Next": "AvPág"}
+
+
+def pretty_chord(chord: str) -> str:
+    """Acorde legible para tooltips y menús: «Ctrl+→», «Supr», «.», «Espacio»."""
+    mods, key = parse_chord(chord)
+    return format_chord(mods, _PRETTY.get(key, key))
+
+
+def pretty_chords(identifier: str, km: Keymap | None = None) -> str:
+    km = km or current()
+    return " · ".join(pretty_chord(c) for c in km.chords(identifier))
+
+
+def menu_groups(available, km: Keymap | None = None) -> list:
+    """[(grupo, [(id, etiqueta, acordes como texto)])] de las acciones `available`
+    (ids), en el orden de registro. Es lo que dibujan el menú contextual y los
+    tooltips de la barra: todo lo que hace una tecla se puede hacer con el mouse."""
+    km = km or current()
+    available = set(available)
+    groups = []
+    for group in GROUPS:
+        rows = [(a.id, a.label, pretty_chords(a.id, km)) for a in ACTIONS.values()
+                if a.group == group and a.id in available]
+        if rows:
+            groups.append((group, rows))
+    return groups
+
+
+def tooltip_text(identifier: str, km: Keymap | None = None) -> str:
+    """«Etiqueta  ·  Acorde» para el tooltip de un botón (sin acorde si no tiene)."""
+    km = km or current()
+    action = ACTIONS.get(identifier)
+    if action is None:
+        return identifier
+    chords = pretty_chords(identifier, km)
+    return f"{action.label}  ·  {chords}" if chords else action.label

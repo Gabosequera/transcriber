@@ -65,15 +65,15 @@ class KeymapTests(unittest.TestCase):
                     "Home": "nav.home", "End": "nav.end", "plus": "view.zoom_in", "equal": "view.zoom_in",
                     "KP_Add": "view.zoom_in", "minus": "view.zoom_out", "KP_Subtract": "view.zoom_out",
                     "Shift+Z": "view.fit", "M": "marks.point", "I": "marks.in", "O": "marks.out",
-                    "X": "edit.toggle", "Delete": "edit.delete", "BackSpace": "edit.delete",
+                    "X": "edit.toggle", "P": "edit.activate", "Delete": "edit.delete", "BackSpace": "edit.delete", "D": "edit.delete",
                     "Return": "edit.edit", "F2": "edit.edit", "Escape": "edit.deselect",
                     "L": "transport.faster", "Shift+L": "transport.skim", "J": "transport.slower",
                     "K": "transport.pause", "1": "transport.rate_1", "4": "transport.rate_4",
                     "Ctrl+Z": "edit.undo", "Ctrl+R": "edit.redo", "Ctrl+Shift+Z": "edit.redo",
-                    "Ctrl+Y": "edit.redo", "B": "tools.toggle_cut", "V": "tools.select",
+                    "Ctrl+Y": "edit.redo", "B": "tools.cut", "V": "tools.select", "A": "tools.select",
                     "Ctrl+A": "tools.select_all", "Ctrl+N": "layers.new_lane",
                     "bracketleft": "edit.trim_start", "bracketright": "edit.trim_end",
-                    "S": "edit.split", "A": "edit.accept", "Shift+A": "edit.accept_next",
+                    "S": "edit.split", "E": "edit.accept", "Shift+E": "edit.accept_next",
                     "Tab": "edit.item_next", "Shift+Tab": "edit.item_prev", "Up": "nav.prev_edge",
                     "Ctrl+Down": "nav.next_silence", "Ctrl+G": "nav.goto", "comma": "nav.frame_prev",
                     "Shift+period": "nav.frame_next_10", "Alt+Left": "edit.nudge_prev",
@@ -139,3 +139,20 @@ class KeymapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MenuTests(unittest.TestCase):
+    def test_menu_groups_follow_registration_order_and_show_chords(self):
+        km = keymap.Keymap({"edit.split": ["Ctrl+S"]})
+        groups = keymap.menu_groups({"edit.split", "transport.play_pause", "nav.home", "no.such"}, km)
+        self.assertEqual([g for g, _ in groups], ["Transporte", "Navegación", "Edición"])
+        self.assertEqual(groups[2][1], [("edit.split", keymap.ACTIONS["edit.split"].label, "Ctrl+S")])
+        self.assertEqual(groups[0][1][0][2], "Espacio")
+        self.assertEqual(keymap.pretty_chord("Ctrl+Right"), "Ctrl+→")
+        self.assertEqual(keymap.pretty_chord("period"), ".")
+        self.assertEqual(keymap.pretty_chords("edit.delete", keymap.Keymap()), "Supr · Retroceso · D")
+        self.assertEqual(keymap.menu_groups(set(), km), [])
+        self.assertEqual(keymap.tooltip_text("edit.split", km), f"{keymap.ACTIONS['edit.split'].label}  ·  Ctrl+S")
+        self.assertEqual(keymap.tooltip_text("edit.split", keymap.Keymap({"edit.split": []})),
+                         keymap.ACTIONS["edit.split"].label)
+        self.assertEqual(keymap.tooltip_text("otro", km), "otro")

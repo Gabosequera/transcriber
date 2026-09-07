@@ -69,23 +69,19 @@ def range_at(ranges: list[dict], t: float, *, preferred: int | None = None) -> i
 
 
 # ---- estados ----
-def toggle_accept(state: str) -> str:
-    """A: `proposed`/`disabled` → `accepted`; `accepted` → `proposed` (§3.1)."""
-    return "proposed" if state == "accepted" else "accepted"
+# Tres teclas explícitas (decisión de Gabriel, 2026-09-07): E acepta, X desactiva,
+# P activa (vuelve a propuesto). Ninguna alterna: pulsar dos veces deja lo mismo, y
+# sobre varios items todos reciben el MISMO estado. Propuesto y aceptado se cortan
+# igual; aceptado es solo la marca de revisión humana.
+STATE_ACTIONS = {"edit.accept": "accepted", "edit.toggle": "disabled", "edit.activate": "proposed"}
 
 
-def batch_accept(states) -> str:
-    """A sobre varios: si TODOS están aceptados, todos a propuesto; si no, todos a
-    aceptado (a los desactivados también los activa) (§8)."""
-    states = list(states)
-    return "proposed" if states and all(s == "accepted" for s in states) else "accepted"
-
-
-def batch_toggle(states) -> str:
-    """X sobre varios: si TODOS están desactivados, todos a propuesto; si no, todos a
-    desactivado (§8)."""
-    states = list(states)
-    return "proposed" if states and all(s == "disabled" for s in states) else "disabled"
+def state_for(action: str) -> str:
+    """Estado que impone una acción de estado (E/X/P), sobre uno o varios items."""
+    try:
+        return STATE_ACTIONS[action]
+    except KeyError:
+        raise ValueError(f"acción de estado desconocida: {action}") from None
 
 
 # ---- items de una capa ----

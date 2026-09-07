@@ -156,20 +156,49 @@ class EditorMedios:
         self.canvas.bind("<Configure>", lambda e: (self._tl_resize(), self._redibujar()))
 
         # ---- transporte (un solo play para la mezcla; el playhead manda) ----
+        # Barra tipo NLE: herramientas del dueño a la izquierda (`fr_tools`), transporte
+        # centrado con botones de icono (tooltip = etiqueta + atajo vigente), columna 4
+        # LIBRE para el dueño (chk_conf del wizard), reloj y menú ⋮ con TODAS las
+        # acciones a la derecha. Todo botón ejecuta la misma acción que su tecla.
+        import toolbar_ui
         self.fr_transporte = ctk.CTkFrame(self.f, fg_color="transparent")
         self.fr_transporte.grid(row=1, column=0, sticky="ew", padx=8)
+        self.fr_transporte.grid_columnconfigure(1, weight=1)
         self.fr_transporte.grid_columnconfigure(3, weight=1)
-        self.btn_play = ctk.CTkButton(self.fr_transporte, text="▶", width=44, command=self._play)
-        self.btn_play.grid(row=0, column=0, padx=(0, 8), pady=2)
-        self.lbl_t = ctk.CTkLabel(self.fr_transporte, text="0:00.0", width=70,
-                                  font=ctk.CTkFont(size=13, weight="bold"))
-        self.lbl_t.grid(row=0, column=1, padx=(0, 10))
-        ctk.CTkLabel(self.fr_transporte,
-                     text="←/→ mover (Shift ±5s) · espacio play · J/K/L velocidad · +/− zoom "
-                          "· rueda pan (Ctrl=zoom) · Shift+Z todo · M marca · I/O región "
-                          "· X decisión · Supr borra · atajos en Ajustes",
-                     text_color="gray55", font=ctk.CTkFont(size=11)).grid(row=0, column=2)
+        self.fr_tools = ctk.CTkFrame(self.fr_transporte, fg_color="transparent")
+        self.fr_tools.grid(row=0, column=0, sticky="w", pady=2)
+        transporte = ctk.CTkFrame(self.fr_transporte, fg_color="transparent")
+        transporte.grid(row=0, column=2, pady=2)
+        self.botones = {}
+        for col, (glyph, action) in enumerate((("⏮", "nav.home"), ("⏪", "nav.step_prev"),
+                                                ("◀", "nav.frame_prev"))):
+            self.botones[action] = toolbar_ui.tool_button(transporte, glyph, action, self.ejecutar)
+            self.botones[action].grid(row=0, column=col, padx=2)
+        self.btn_play = ctk.CTkButton(transporte, text="▶", width=44, height=28, command=self._play,
+                                      font=ctk.CTkFont(size=14, weight="bold"))
+        self.btn_play.grid(row=0, column=3, padx=(6, 6))
+        toolbar_ui.Tooltip(self.btn_play, lambda: __import__("keymap").tooltip_text("transport.play_pause"))
+        for col, (glyph, action) in enumerate((("▶", "nav.frame_next"), ("⏩", "nav.step_next"),
+                                                ("⏭", "nav.end")), start=4):
+            self.botones[action] = toolbar_ui.tool_button(transporte, glyph, action, self.ejecutar)
+            self.botones[action].grid(row=0, column=col, padx=2)
+        self.btn_rate = toolbar_ui.tool_button(
+            transporte, "×1", "transport.faster", self.ejecutar, width=44,
+            tooltip=lambda: "Velocidad: click = más rápido · " + __import__("keymap").tooltip_text(
+                "transport.faster").split("  ·  ")[-1] + " · J más lento · K pausa · 1-4 exacta · Shift+L skim")
+        self.btn_rate.grid(row=0, column=7, padx=(8, 2))
+        self.btn_rate.bind("<Button-3>", lambda e: (self._rate_step(-1), "break")[1])
         # (columna 4 del fr_transporte queda LIBRE para widgets del dueño — chk_conf)
+        self.lbl_t = ctk.CTkLabel(self.fr_transporte, text="0:00.0", width=88, anchor="e",
+                                  font=ctk.CTkFont(size=13, weight="bold"))
+        self.lbl_t.grid(row=0, column=5, padx=(10, 6))
+        self.btn_menu = toolbar_ui.tool_button(self.fr_transporte, "⋮", "menu", lambda a: self._menu_contextual(),
+                                               width=30, tooltip="Todas las acciones y sus atajos (también con click derecho en el timeline)")
+        self.btn_menu.grid(row=0, column=6, padx=(0, 2))
+        self.menu_contextual = True            # el dueño puede apagarlo si tiene el suyo
+        self.menu_extra = None                 # hook: menu_extra(e, menu) → True si añadió entradas
+        self.acciones_soportadas = None        # hook: () → ids que el dueño atiende
+        self.canvas.bind("<Button-3>", self._menu_contextual, add=True)
 
         # ---- TIMELINE unificado (estilo editor): controles por pista | carriles ----
         tlf = ctk.CTkFrame(self.f)
@@ -195,6 +224,7 @@ class EditorMedios:
         self.tl.bind("<Button-5>", self._tl_rueda)              # Linux ↓
         # resize con DEBOUNCE (no redibujar por cada pixel del drag — consenso q.6)
         self.tl.bind("<Configure>", self._tl_resize)
+        self.tl.bind("<Button-3>", self._menu_contextual, add=True)   # menú con todas las acciones
         # ---- teclado: keymap configurable (diseño §2) ----
         # Un solo <Key> en el TOPLEVEL (add=True, nunca bind_all) con GUARDA DE FOCO:
         # solo despacha si el foco está en un Canvas/Frame/Label o el propio toplevel;
@@ -454,9 +484,46 @@ class EditorMedios:
             self._reapuntar_prefetch()
 
     def _texto_reloj(self) -> str:
-        """«0:12.3», y «0:12.3 ×2» cuando la velocidad no es la normal (diseño §1)."""
+        """«0:12.3», y «0:12.3 ×2» cuando la velocidad no es la normal (diseño §1).
+        Refleja además la velocidad en el botón de la barra."""
         base = f"{int(self.t_play // 60)}:{self.t_play % 60:04.1f}"
-        return base if abs(self.rate - 1.0) < 1e-9 else f"{base} ×{self.rate:g}"
+        rate = f"×{self.rate:g}"
+        if getattr(self, "btn_rate", None) is not None and self.btn_rate.cget("text") != rate:
+            self.btn_rate.configure(text=rate)
+        return base if abs(self.rate - 1.0) < 1e-9 else f"{base} {rate}"
+
+    # ---- menú contextual: todas las acciones, con su atajo ----
+    def _acciones_disponibles(self) -> set:
+        ids = set(self._handlers)
+        if self.acciones_soportadas is not None:
+            try:
+                ids |= set(self.acciones_soportadas())
+            except Exception:
+                pass
+        return ids
+
+    def _construir_menu(self, e=None):
+        import toolbar_ui
+        before = (lambda menu: self.menu_extra(e, menu)) if (self.menu_extra is not None and e is not None) else None
+        return toolbar_ui.build_menu(self.tl, self._acciones_disponibles(), self.ejecutar, before=before)
+
+    def _menu_contextual(self, e=None):
+        """Click derecho en el timeline o el preview (y el botón ⋮): el mismo
+        inventario del keymap agrupado, con las entradas del item bajo el cursor
+        primero si el dueño las aporta."""
+        if not self.info or not self.menu_contextual:
+            return None
+        menu = self._construir_menu(e)
+        if e is not None and getattr(e, "x_root", None) is not None:
+            x, y = e.x_root, e.y_root
+        else:
+            x = self.btn_menu.winfo_rootx()
+            y = self.btn_menu.winfo_rooty() + self.btn_menu.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+        return "break"
 
     # ---- velocidad de reproducción (diseño docs/diseno-navegacion-editor.md §1) ----
     def set_rate(self, rate):
