@@ -142,6 +142,53 @@ def main():
         workspace.editor._play()
         spin(lambda: workspace.editor.repro.position() is not None and workspace.editor.t_play > 1.4)
         workspace.editor._stop_preview()
+        # ---- velocidad (Fase 1): ×2 reproduce con reloj escalado; el cambio en vivo es UNA re-sesión
+        ed = workspace.editor
+        ed._set_playhead(1)
+        ed._play(rate=2)
+        spin(lambda: ed.repro.position() is not None and ed.t_play > 1.4)
+        assert ed.repro.rate == 2 and ed.repro.clock.rate == 2 and not ed.repro.mudo
+        assert ed.lbl_t.cget("text").endswith("×2"), ed.lbl_t.cget("text")
+        session = ed._vses
+        ed.set_rate(4); ed.set_rate(3); ed.set_rate(4)      # tres pulsaciones = un reinicio
+        spin(lambda: ed._vses is not session and ed._vses is not None and ed.repro.playing()
+             and ed.repro.rate == 4)
+        assert ed.rate == 4 and ed._vses.rate == 4 and ed._vses.skip == "bidir"
+        ed._stop_preview()
+        ed.rate = 1.0
+        # ---- keymap (Fase 2): guarda de foco, editor activo y cambio en Ajustes sin reiniciar
+        import keymap, tempfile
+        from types import SimpleNamespace as NS
+        ed.activar()
+        top = ed.f.winfo_toplevel()
+        ev = lambda w, ks, st=0: NS(widget=w, keysym=ks, state=st)
+        ed._set_playhead(2)
+        campo = workspace.min_gap_entry._entry            # el tk.Entry interno del CTkEntry
+        assert ed._key_toplevel(ev(campo, "Right")) is None and ed.t_play == 2      # escribir, no navegar
+        assert ed._key_toplevel(ev(ed.tl, "Right")) == "break" and abs(ed.t_play - 2.5) < 1e-6
+        assert ed._key_toplevel(ev(ed.canvas, "Left")) == "break" and abs(ed.t_play - 2.0) < 1e-6
+        assert ed._key_toplevel(ev(top, "Home")) == "break" and ed.t_play == 0
+        assert ed._key_toplevel(ev(ed.tl, "q")) is None                              # sin acción: propaga
+        ed.desactivar()
+        assert ed._key_toplevel(ev(ed.tl, "Right")) is None and ed.t_play == 0      # editor inactivo
+        ed.activar()
+        marcas_antes = len(ed.reg.marcas)
+        assert ed._key_toplevel(ev(ed.tl, "m")) == "break" and len(ed.reg.marcas) == marcas_antes + 1
+        ed.e_prompt.focus_set()                                                       # M abre el prompt
+        assert ed._key_toplevel(ev(ed.e_prompt._entry, "x")) is None                 # se escribe x
+        assert ed.reg.marcas[-1].get("decision") is None
+        ed.tl.focus_set()
+        assert ed._key_toplevel(ev(ed.tl, "Delete")) == "break" and len(ed.reg.marcas) == marcas_antes
+        with tempfile.TemporaryDirectory() as tmp:
+            override = Path(tmp) / "keymap.json"
+            keymap.save({"nav.step_next": ["Ctrl+Right"]}, override)
+            keymap.reload(override)                                                   # = guardar en Ajustes
+            assert ed._key_toplevel(ev(ed.tl, "Right")) is None and ed.t_play == 0
+            assert ed._key_toplevel(ev(ed.tl, "Right", keymap.STATE_CONTROL)) == "break" and ed.t_play == .5
+            app.keymap_settings.refresh()
+            assert "Ctrl+Right" in app.keymap_settings._rows["nav.step_next"]["chord"].cget("text")
+            keymap.reload(Path(tmp) / "no-existe.json")                               # defaults otra vez
+        assert ed._key_toplevel(ev(ed.tl, "Left")) == "break" and ed.t_play == 0
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

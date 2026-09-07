@@ -167,6 +167,32 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
 - **Scrub**: `FrameWorker` (frame exacto last-wins, max_w del letterbox, MJPEG q4,
   LANCZOS en pausa) + `Prefetcher` (UN ffmpeg a 0.5 fps por ventana [t−10, t+60] →
   caché LRU por bytes, 64 MB, hit instantáneo durante el drag).
+- **Velocidad ×1–×8** (2026-09-06, diseño `diseno-navegacion-editor.md` §1, Fase 1): el
+  factor `rate` se aplica en los DOS extremos del mismo reloj. Audio:
+  `medios.comando_mezcla(..., rate)` termina la mezcla en `rubberband=tempo=R`
+  (tono conservado; `atempo` si el ffmpeg de la máquina no lo trae, sondeo único
+  `rubberband_disponible()`), FFplay consume el audio estirado y sigue siendo el reloj
+  maestro; `AudioClock(start, rate)` devuelve `start + rate·(valor + transcurrido)` y
+  el umbral de reloj perdido (0,5 s) sigue en segundos de pared. Por encima de
+  `preview_audio_max_rate` (config.json, 4.0) se añade `volume=0` (skim ×8: mudo pero
+  con reloj). Video: `SesionVideo(rate)` → `VideoStream(fps=VS_FPS/rate, skip)`: 30
+  frames por segundo de PARED a cualquier velocidad, `ts = t0 + n/fps` intacto;
+  `-skip_frame bidir` desde ×2 y `nokey` desde ×6 (opciones de entrada). Editor:
+  `rate`/`SPEEDS`, `set_rate` = UNA re-sesión desde `t_play` con debounce de 150 ms
+  (mismo token que `_remezclar_debounced`); `lbl_t` muestra «×2»; el status añade
+  «· ×2» y «(audio mudo)». Sin timers nuevos: `_anim_tick` no cambia.
+- **Teclado** (Fase 2): `keymap.py` puro (`ACTIONS` id → etiqueta/grupo/acordes,
+  `parse_chord`/`format_chord`, `chord_from_event` con Alt `0x20000` en Windows y `0x8`
+  en Linux, AltGr = tecla sin modificadores en Windows, `Keymap.load/save/reload`,
+  conflictos «gana el primero registrado», `keymap.json` en `CONFIG_DIR` con solo las
+  diferencias). `EditorMedios` liga UN `<Key>` en el toplevel (`add=True`, nunca
+  `bind_all`) con guarda de foco (`_foco_permite_teclas`: Canvas/Frame/Label/toplevel
+  sí; Entry/Text/Button/Checkbox/Scale no) y despacha solo el editor ACTIVO
+  (`activar()/desactivar()` → `_keys_activos`). `_dispatch` → `acciones_extra(action,
+  e)` del dueño primero (Automático: `LayersController.action`) → `self._handlers[id]`;
+  `"break"` solo si se consumió. Click izquierdo en algo no interactivo del editor →
+  `tl.focus_set()`. Ajustes → Atajos (`keymap_ui.KeymapSettings`): Grabar / × /
+  Restaurar; guardar = `keymap.save()` + `reload()` y aplica al instante.
 - **Apagado**: TODO pasa por `wizard._stop_preview()` (epoch de sesión `_preview_epoch`
   invalida callbacks tardíos; mata stream+prefetch+timers+audio). Lo llaman play/stop,
   cambio de video, nav fuera del paso 1 y cierre.
@@ -303,6 +329,16 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   todo apagado pasa por `wizard._stop_preview()`; los `available()` de análisis usan
   find_spec y NO deben importar torch/transformers (arranque de la GUI).
 - **Código vivo**: la GUI no recarga .py — reiniciar la app tras editar.
+- **Velocidad = el mismo reloj en los dos extremos**: el audio se estira (rubberband/
+  atempo) para que FFplay siga siendo el maestro; el video decodifica a `VS_FPS/rate`.
+  Nunca silenciar por debajo de `preview_audio_max_rate` (el usuario debe oír lo que
+  dicen a ×2–×4); a ×1 la línea de ffmpeg es EXACTAMENTE la de siempre (sin filtro).
+  `AudioClock.position()` sigue devolviendo None con muestra vieja (> 0,5 s de pared).
+  El cambio de velocidad es una re-sesión con debounce, sin hilos ni timers nuevos.
+- **Teclas**: ningún `bind_all`; un solo `<Key>` en el toplevel con guarda de foco
+  (jamás despachar con el foco en un Entry/Text) y solo el editor activo. Toda tecla
+  se resuelve por `keymap.current()` (lookup O(1)); las acciones se identifican por id
+  estable (`keymap.ACTIONS`), nunca por keysym en los handlers.
 - **El layout del editor no se mueve con texto**: el pie de `EditorMedios` tiene
   altura FIJA (dos renglones; lo que no entra se recorta) y el detalle del item
   de capa bajo el mouse va a `LayerDetailBar` (canvas de altura constante en la
@@ -343,18 +379,28 @@ medio que nunca se publica como master. Al aparecer la metadata real se adoptan
 por fingerprint. Las eliminaciones de items y descendientes quedan protegidas
 frente a respuestas AI posteriores, además de las correcciones y capas borradas.
 
-### Pendiente: navegación tipo editor — diseño 2026-09-06
+### Navegación tipo editor — diseño 2026-09-06, en implementación por fases
 
-Velocidad ×1–×8 (atempo + `fps=VS_FPS/rate` + skip de B-frames/claves, mismo reloj
-maestro), atajos configurables (`keymap.py` + sección Atajos), acciones de navegación
-y edición (bordes, fotograma, dividir, recortar, A = aceptado con campo `accepted`
-aditivo en trims.json), deshacer/rehacer, herramientas de mouse Selección (V: marquesina,
-selección múltiple, mover el conjunto) y Corte (B: crear/estirar, Shift resta o divide,
-Ctrl mueve) con `persist_many`, carriles de la AI (temas/subtemas por profundidad de la
-misma capa `topics`, cortes sugeridos como vista por origen del mismo `trims.json`,
-`kind: "ai"`, respuestas con varias capas, botón «Preparar revisión editorial» y Tarea 4
-de la skill) y puertas de rendimiento medibles. Diseño y prompt de implementación por
-fases en [diseno-navegacion-editor.md](diseno-navegacion-editor.md). Sin código todavía.
+Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-editor.md).
+
+- **Fase 1 (hecha)** — velocidad ×1/×2/×3/×4/×8 (§3.1). Medido en el VOD de referencia
+  con `tools/benchmark_preview.py --rates 1,2,3,4,8 --seconds 20` (ver
+  `mediciones-reproductor.md`): ×2–×4 sin respawns y 29,9 frames/s de pared; ×1 sin
+  regresión frente al código anterior medido con el mismo script (mediana −25 ms, P95
+  ~41 ms en ambos; los 34 ms de P95 de la tabla histórica salen del muestreo de 3 s).
+  **Puerta no cumplida:** el cambio de velocidad en vivo tarda ~1,0 s hasta el primer
+  frame nuevo (150 ms de debounce + ~850 ms de primer frame de una sesión nueva sobre
+  HEVC 3360×1080), contra los ≤ 400 ms del diseño §5. No se aflojó la puerta: es el
+  coste de la re-sesión que el diseño exige, igual que un seek; reducirlo pide otro
+  diseño (solapar la sesión vieja con la nueva).
+- **Fase 2 (hecha)** — keymap configurable y Ajustes → Atajos (§3.1). Migración 1:1
+  de las teclas anteriores; las acciones de las fases 3–7 ya tienen id y acorde por
+  defecto en `keymap.ACTIONS`, sin handler todavía (la tecla no hace nada hasta que
+  llegue su fase).
+- **Pendientes:** Fase 3 navegación (fotograma, bordes, silencios, ir a tiempo, zoom a
+  selección), Fase 4 edición y deshacer (`editorial_history.py`, `accepted`), Fase 5
+  hwaccel opcional, Fase 6 selección múltiple y herramientas de mouse, Fase 7 carriles
+  de la AI y lanes de `trims.json`.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

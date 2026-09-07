@@ -305,17 +305,36 @@ y ajustan sus vecinos al cambiar un borde; dividir el plan usa **Revisar chunks*
 Las marcas envuelven el Registro compartido y los recortes mantienen `trims.json`:
 no hay dos copias editables. **Preparar capas para AI** publica `views/layers.json`.
 
+Las teclas funcionan con el foco en el timeline o en el preview (un click en cualquier
+parte no interactiva del editor lo da); dentro de un campo de texto se escribe normal.
+Todos los atajos se cambian en **Ajustes → Atajos** (Grabar captura la siguiente tecla,
+× deja la acción sin atajo, Restaurar vuelve a los predeterminados; un conflicto se
+muestra en rojo con el nombre de la otra acción) y aplican al instante. Se guardan por
+máquina en `keymap.json`. En teclados latinos, `[` y `]` se escriben con AltGr y se
+reconocen igual.
+
 | Tecla / gesto | Acción |
 |---|---|
 | Click o arrastre sobre las pistas | Mover el playhead (scrub) |
 | `←` / `→`, con `Shift` | ±0,5 s / ±5 s |
 | `Inicio` / `Fin` | Ir al principio / al final |
 | Espacio | Reproducir / detener la mezcla (con mute `M` y solo `S` por pista) |
+| `K` | Pausa |
+| `L` / `J` | Más rápido ×1→×2→×3→×4→×8 (pausado: reproduce a ×1) / más lento (a ×1 pausa) |
+| `1` `2` `3` `4` | Velocidad exacta (arranca si estaba pausado) |
+| `Shift` + `L` | Skim a ×8: solo fotogramas clave, audio mudo |
 | `+` / `−`, `Ctrl` + rueda | Zoom (la rueda centra en el cursor) |
 | Rueda, arrastre con botón central | Desplazarse |
 | `Shift` + `Z` | Ver todo |
 | `M`, `I`/`O`, `X`, `Supr` en el carril de marcas | Marcas del autor (ver la guía del modo Manual) |
 | Carril «recortes» | Ver la tabla de §3 |
+
+**Velocidad.** Hasta ×4 se oye lo que dicen, solo más rápido y con el tono conservado
+(el mismo estiramiento que hace DaVinci), para juzgar un recorte sin bajar la
+velocidad; a ×8 el audio va mudo. El reloj muestra «0:12.3 ×2». Cambiar de velocidad
+durante la reproducción reinicia la sesión desde el playhead (≈1 s en un VOD HEVC).
+`preview_audio_max_rate` en `config.json` (4.0) baja el tope si en otra máquina el
+estiramiento no llega a tiempo real.
 
 ## Límites y notas
 

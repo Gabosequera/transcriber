@@ -622,10 +622,14 @@ class App(ctk.CTk):
                      justify="left", anchor="w", wraplength=560).grid(
             row=1, column=1, padx=(4, 12), pady=(0, 8), sticky="w")
 
+        # ---- atajos del editor (keymap.json por máquina; aplica al instante) ----
+        from keymap_ui import KeymapSettings
+        self.keymap_settings = KeymapSettings(wrap, row=7, padx=6, pady=(0, 12))
+
         # ---- estado guardado ----
         self.settings_status = ctk.CTkLabel(wrap, text="", text_color="#2fa572",
                                             font=ctk.CTkFont(size=12))
-        self.settings_status.grid(row=7, column=0, sticky="w", padx=10, pady=(0, 8))
+        self.settings_status.grid(row=8, column=0, sticky="w", padx=10, pady=(0, 8))
 
         # cargar valores actuales + poblar detección
         cfg = hardware.load()

@@ -375,7 +375,9 @@ class LayersController:
         editor.refrescar_layout()
         self.sync_detail()
 
-    def keys(self, e):
+    def action(self, action, _e=None):
+        """`acciones_extra` del editor: acciones del keymap sobre el item de capa
+        seleccionado (el dueño va primero). True si se consumió."""
         if not self.selected or not self.selected[1]:
             return False
         lid, iid, _ = self.selected
@@ -383,14 +385,14 @@ class LayersController:
         if not item:
             return False
         try:
-            if e.keysym in ("Delete", "BackSpace"):
+            if action == "edit.delete":
                 self.persist(lid, item, delete=True)
-            elif e.keysym.lower() == "x":
+            elif action == "edit.toggle":
                 item["state"] = "proposed" if item["state"] == "disabled" else "disabled"
                 self.persist(lid, item)
-            elif e.keysym in ("Return", "F2"):
+            elif action == "edit.edit":
                 self.edit_dialog()
-            elif e.keysym == "Escape":
+            elif action == "edit.deselect":
                 self.selected = None
                 self.w.editor.redibujar()
                 self.sync_detail()
@@ -459,9 +461,8 @@ class LayersController:
         self.sync_detail()
         menu = tk.Menu(self.w.editor.tl, tearoff=False)
         menu.add_command(label="Editar comentario y rangos", command=self.edit_dialog)
-        from types import SimpleNamespace
-        for label, key in (("Activar / desactivar", "x"), ("Borrar item", "Delete")):
-            menu.add_command(label=label, command=lambda k=key: self.keys(SimpleNamespace(keysym=k)))
+        for label, action in (("Activar / desactivar", "edit.toggle"), ("Borrar item", "edit.delete")):
+            menu.add_command(label=label, command=lambda a=action: self.action(a))
         menu.add_command(label="Ir al inicio", command=lambda: self.w.editor._set_playhead(item_hit[0]["ranges"][item_hit[1]]["t_ini"]))
         menu.tk_popup(e.x_root, e.y_root)
 

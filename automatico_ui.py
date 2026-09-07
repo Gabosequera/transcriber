@@ -303,7 +303,7 @@ class AutomaticWorkspace:
                                    on_video_cargado=self._on_media_loaded,
                                    carriles_extra=self._cut_lanes,
                                    on_playhead=self._on_playhead,
-                                   teclas_extra=self.layers.keys, marcas_en_capas=True)
+                                   acciones_extra=self.layers.action, marcas_en_capas=True)
         self.editor.f.grid(row=0, column=0, sticky="nsew")
         # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
         # en la fila libre del editor (entre el timeline y el status) — nada de

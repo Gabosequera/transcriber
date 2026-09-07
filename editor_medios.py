@@ -23,8 +23,9 @@ Contrato con el dueño (wizard / tab Marcar):
     bloques y recortes de Automático). Un carril con `gesto(fase, e, g, y0)`
     (fase: press/motion/release/doble) recibe el botón izquierdo cuando cae sobre
     él; si `press` devuelve True el gesto queda CAPTURADO por ese carril hasta
-    soltar y el playhead no se mueve;  `teclas_extra(e)` → True si el dueño
-    consumió la tecla (se consulta ANTES que las marcas);  `on_video_cargado(info,
+    soltar y el playhead no se mueve;  `acciones_extra(action, e)` → True si el
+    dueño consumió la ACCIÓN del keymap (se consulta ANTES que las marcas; los ids
+    están en keymap.ACTIONS);  `on_video_cargado(info,
     fp)` — tras la inspección, ANTES de armar pistas;  `on_playhead(t)` — cambio
     del playhead. La columna 4 del transporte y la fila 4 de `self.f` (entre el
     timeline y el status, que tiene altura FIJA) quedan libres para widgets del
@@ -71,14 +72,14 @@ class EditorMedios:
 
     def __init__(self, parent, *, ancho_ctl=330, controles_pista_extra=None,
                  overlay_preview=None, carriles_extra=None, on_video_cargado=None,
-                 on_playhead=None, teclas_extra=None, marcas_en_capas=False):
+                 on_playhead=None, acciones_extra=None, marcas_en_capas=False):
         self._marks_height = 0 if marcas_en_capas else MARKS_H
         self.controles_pista_extra = controles_pista_extra
         self.overlay_preview = overlay_preview
         self.carriles_extra = carriles_extra
         self.on_video_cargado = on_video_cargado
         self.on_playhead = on_playhead
-        self.teclas_extra = teclas_extra
+        self.acciones_extra = acciones_extra
         self._drag_extra = None                # (gesto, y0) del carril extra que capturó B1
 
         self.q: queue.Queue = queue.Queue()
@@ -160,9 +161,9 @@ class EditorMedios:
                                   font=ctk.CTkFont(size=13, weight="bold"))
         self.lbl_t.grid(row=0, column=1, padx=(0, 10))
         ctk.CTkLabel(self.fr_transporte,
-                     text="←/→ mover (Shift ±5s) · espacio play · +/− zoom · rueda pan "
-                          "(Ctrl=zoom) · Shift+Z todo · M marca · I/O región · X decisión "
-                          "· Supr borra",
+                     text="←/→ mover (Shift ±5s) · espacio play · J/K/L velocidad · +/− zoom "
+                          "· rueda pan (Ctrl=zoom) · Shift+Z todo · M marca · I/O región "
+                          "· X decisión · Supr borra · atajos en Ajustes",
                      text_color="gray55", font=ctk.CTkFont(size=11)).grid(row=0, column=2)
         # (columna 4 del fr_transporte queda LIBRE para widgets del dueño — chk_conf)
 
@@ -190,15 +191,19 @@ class EditorMedios:
         self.tl.bind("<Button-5>", self._tl_rueda)              # Linux ↓
         # resize con DEBOUNCE (no redibujar por cada pixel del drag — consenso q.6)
         self.tl.bind("<Configure>", self._tl_resize)
-        for c in (self.tl, self.canvas):       # navegación tipo editor (teclado)
-            # bindings SOLO en los canvases (sin bind_all: m/i/o/x deben poder
-            # escribirse en cualquier Entry sin disparar marcas — consenso q.4)
-            for ks in ("Left", "Right", "Home", "End", "m", "i", "o", "x",
-                       "Delete", "BackSpace", "plus", "equal", "minus",
-                       "KP_Add", "KP_Subtract", "z", "Z", "Escape",
-                       "l", "L", "j", "J", "k", "K", "1", "2", "3", "4"):
-                c.bind(f"<Key-{ks}>", self._tl_key)
-            c.bind("<Key-space>", lambda e: (self._play(), "break")[1])
+        # ---- teclado: keymap configurable (diseño §2) ----
+        # Un solo <Key> en el TOPLEVEL (add=True, nunca bind_all) con GUARDA DE FOCO:
+        # solo despacha si el foco está en un Canvas/Frame/Label o el propio toplevel;
+        # nunca en un Entry/Text (m/i/o/x/letras/números se siguen escribiendo) ni en
+        # Button/Checkbox/OptionMenu (space/Return los activan). Así las teclas
+        # funcionan sin hacer click en el canvas antes. Solo el editor ACTIVO despacha
+        # (hay tres en la app: wizard, Marcar, Automático).
+        self._keys_activos = False
+        self._handlers = self._armar_handlers()
+        top = self.f.winfo_toplevel()
+        top.bind("<Key>", self._key_toplevel, add=True)
+        # click izquierdo en cualquier parte NO interactiva del editor → foco al timeline
+        top.bind("<Button-1>", self._click_toplevel, add=True)
 
         # ---- panel NO MODAL de la marca seleccionada (consenso r2 h.8) ----
         self.f_marca = ctk.CTkFrame(self.f)
@@ -289,13 +294,15 @@ class EditorMedios:
             self._dibujar_timeline()
 
     def activar(self):
-        """La vista del editor volvió a estar visible."""
+        """La vista del editor volvió a estar visible: despacha las teclas."""
+        self._keys_activos = True
         if self.info:
             self._dibujar_timeline()
 
     def desactivar(self):
         """Salir de la vista apaga TODO el preview aunque esté pausado (r3.3):
         también el prefetch y su timer, que si no compiten con otros trabajos."""
+        self._keys_activos = False
         self._stop_preview()
         self.btn_play.configure(text="▶")
 
@@ -900,68 +907,136 @@ class EditorMedios:
             self._pan(-d * self.view[1] * 0.1)
         return "break"
 
-    def _tl_key(self, e):
+    # ---- teclado: despacho por keymap (diseño §2) ----
+    @staticmethod
+    def _foco_permite_teclas(w, top) -> bool:
+        """Guarda de foco: True si el widget con foco es un Canvas, un Frame, un Label
+        o el propio toplevel. Entry/Text (escribir) y Button/Checkbox/Scale/OptionMenu
+        (space/Return los activan) nunca despachan."""
+        import tkinter as tk
+        if w is None:
+            return False
+        if w is top:
+            return True
+        if isinstance(w, (tk.Entry, tk.Text, tk.Spinbox, tk.Listbox, tk.Button,
+                          tk.Checkbutton, tk.Radiobutton, tk.Menubutton, tk.Scale,
+                          tk.Scrollbar)):
+            return False
+        try:
+            from tkinter import ttk
+            if isinstance(w, (ttk.Entry, ttk.Combobox, ttk.Spinbox, ttk.Button,
+                              ttk.Checkbutton, ttk.Radiobutton, ttk.Scale)):
+                return False
+        except Exception:
+            pass
+        return isinstance(w, (tk.Canvas, tk.Frame, tk.Label, tk.Toplevel, tk.Tk))
+
+    def _key_toplevel(self, e):
+        if not self._keys_activos:
+            return None
+        try:
+            top = self.f.winfo_toplevel()
+            if getattr(e, "widget", None) is not None and e.widget.winfo_toplevel() is not top:
+                return None                    # diálogo modal / otra ventana
+        except Exception:
+            return None
+        if not self._foco_permite_teclas(getattr(e, "widget", None), top):
+            return None
+        return self._dispatch(e)
+
+    def _click_toplevel(self, e):
+        """Click izquierdo en un widget NO interactivo del editor → foco al timeline
+        (las teclas funcionan sin hacer click en el canvas antes)."""
+        if not self._keys_activos:
+            return None
+        w = getattr(e, "widget", None)
+        try:
+            top = self.f.winfo_toplevel()
+            if w is None or w.winfo_toplevel() is not top:
+                return None
+            if not self._foco_permite_teclas(w, top):
+                return None
+            if w is not self.tl and not str(w).startswith(str(self.f)):
+                return None                    # fuera del editor (panel, barra…)
+            self.tl.focus_set()
+        except Exception:
+            pass
+        return None
+
+    def _dispatch(self, e):
+        """Acorde del evento → acción del keymap (lookup O(1)) → el dueño primero
+        (`acciones_extra(action, e)`), después la tabla de handlers. `"break"` SOLO si
+        se consumió una acción; una tecla sin acción sigue su propagación normal."""
         if not self.info:
-            return "break"
-        if self.teclas_extra:                  # el dueño primero (recortes seleccionados)
+            return None
+        import keymap
+        action = keymap.resolve_event(getattr(e, "keysym", ""), getattr(e, "state", 0))
+        if action is None:
+            return None
+        return "break" if self.ejecutar(action, e) else None
+
+    def ejecutar(self, action: str, e=None) -> bool:
+        """Ejecuta una acción por id (teclas, menús, tests). True si alguien la atendió."""
+        if self.acciones_extra:                # el dueño primero (items de capa seleccionados)
             try:
-                if self.teclas_extra(e):
-                    return "break"
-            except Exception:
-                pass
-        ks = e.keysym
-        shift = bool(e.state & 0x1)
-        # velocidad (provisional hasta el keymap de la Fase 2): L/J/K/1-4, Shift+L skim
-        if ks in ("l", "L"):
-            if shift:
-                if not self._playback_activo():
-                    self.rate = SPEEDS[-1]
-                    self._play()
-                else:
-                    self.set_rate(SPEEDS[-1])
-            else:
-                self._rate_step(+1)
-            return "break"
-        if ks in ("j", "J"):
-            self._rate_step(-1)
-            return "break"
-        if ks in ("k", "K"):
-            if self._playback_activo():
-                self._play()
-            return "break"
-        if ks in ("1", "2", "3", "4"):
-            if self._playback_activo():
-                self.set_rate(float(ks))
-            else:
-                self.rate = float(ks)
-                self._play()
-            return "break"
-        if ks in ("Left", "Right", "Home", "End"):
-            paso = 5.0 if shift else 0.5
-            t = {"Left": self.t_play - paso, "Right": self.t_play + paso,
-                 "Home": 0.0, "End": self.info["duracion"]}[ks]
-            self._set_playhead(t)
-            if self._playback_activo():        # teclas durante playback = saltar de verdad
-                self._remezclar_debounced(self.t_play)
-        elif ks in ("plus", "equal", "KP_Add"):
-            self._zoom(1.5)
-        elif ks in ("minus", "KP_Subtract"):
-            self._zoom(1 / 1.5)
-        elif ks in ("z", "Z") and shift:       # Shift+Z = ver todo (DaVinci)
-            self._fit()
-        elif ks == "m":
-            self._marca_punto()
-        elif ks == "i":
-            self._pend_in = self.t_play
-            self.status(f"◀ IN marcado en {self.t_play:.1f}s — «O» en el out cierra la región.")
-            self._dibujar_timeline()
-        elif ks == "o":
-            self._marca_out()
-        elif ks == "x":
-            self._marca_ciclar()
-        elif ks in ("Delete", "BackSpace"):
-            self._marca_borrar()
-        return "break"
+                if self.acciones_extra(action, e):
+                    return True
+            except Exception as error:
+                self.status(f"⚠ {error}")
+                return True
+        handler = self._handlers.get(action)
+        if handler is None:
+            return False
+        handler()
+        return True
+
+    def _mover_playhead(self, t):
+        """Teclas de navegación: mueve el playhead y, durante playback, salta de verdad
+        (re-mezcla con debounce)."""
+        self._set_playhead(t)
+        if self._playback_activo():
+            self._remezclar_debounced(self.t_play)
+
+    def _rate_exact(self, rate):
+        """Velocidad exacta (1-4, Shift+L = ×8): reproduciendo cambia; pausado arranca."""
+        if self._playback_activo():
+            self.set_rate(rate)
+        else:
+            self.rate = min(SPEEDS, key=lambda s: abs(s - float(rate)))
+            self._play()
+
+    def _marca_in(self):
+        self._pend_in = self.t_play
+        self.status(f"◀ IN marcado en {self.t_play:.1f}s — «O» en el out cierra la región.")
+        self._dibujar_timeline()
+
+    def _armar_handlers(self) -> dict:
+        """Tabla id de acción → handler (migración 1:1 de las teclas anteriores más
+        la velocidad). Las fases siguientes añaden las suyas."""
+        h = {
+            "transport.play_pause": lambda: self._play(),
+            "transport.pause": lambda: self._play() if self._playback_activo() else None,
+            "transport.faster": lambda: self._rate_step(+1),
+            "transport.slower": lambda: self._rate_step(-1),
+            "transport.skim": lambda: self._rate_exact(SPEEDS[-1]),
+            "nav.step_prev": lambda: self._mover_playhead(self.t_play - 0.5),
+            "nav.step_next": lambda: self._mover_playhead(self.t_play + 0.5),
+            "nav.step_prev_5": lambda: self._mover_playhead(self.t_play - 5.0),
+            "nav.step_next_5": lambda: self._mover_playhead(self.t_play + 5.0),
+            "nav.home": lambda: self._mover_playhead(0.0),
+            "nav.end": lambda: self._mover_playhead(self.info["duracion"]),
+            "view.zoom_in": lambda: self._zoom(1.5),
+            "view.zoom_out": lambda: self._zoom(1 / 1.5),
+            "view.fit": self._fit,
+            "marks.point": self._marca_punto,
+            "marks.in": self._marca_in,
+            "marks.out": self._marca_out,
+            "edit.toggle": self._marca_ciclar,
+            "edit.delete": self._marca_borrar,
+        }
+        for n in (1, 2, 3, 4):
+            h[f"transport.rate_{n}"] = lambda r=float(n): self._rate_exact(r)
+        return h
 
     # ---- alturas: carriles extra del dueño entre MARCAS y las pistas ----
     def _carriles(self) -> list[dict]:

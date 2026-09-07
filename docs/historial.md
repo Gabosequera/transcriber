@@ -512,3 +512,32 @@ Detalle añadido a la herramienta Selección: recorte por bordes al estilo DaVin
 final de cualquier item, arrastre que agranda o encoge solo ese lado con
 previsualización y etiqueta de tiempo, zonas reducidas en items estrechos, cursor
 cambiado solo cuando cambia el estado).
+
+## 2026-09-06 (5ª sesión) — Navegación tipo editor: Fase 1 velocidad y Fase 2 atajos
+
+Empieza la implementación del diseño `docs/diseno-navegacion-editor.md`, una fase
+por commit. Línea base medida antes de tocar nada (`media/bench/baseline.json`,
+79 tests verdes).
+
+**Fase 1 — velocidad ×1/×2/×3/×4/×8.** El mismo `rate` en los dos extremos del
+reloj: `comando_mezcla` termina la mezcla en `rubberband=tempo=R` (tono
+conservado; `atempo` si el ffmpeg de la máquina no lo trae) y FFplay sigue siendo
+el maestro con `AudioClock(start, rate)`; `SesionVideo(rate)` decodifica a
+`VS_FPS/rate` con `-skip_frame bidir` desde ×2 y `nokey` desde ×6. Por encima de
+`preview_audio_max_rate` (4.0) el audio va mudo pero sigue dando reloj.
+`set_rate` es una re-sesión con debounce de 150 ms; el reloj muestra «×2».
+Benchmark por velocidades (`--rates`, `--seconds`): ×2–×4 sin respawns y 29,9
+frames/s de pared; ×1 idéntico al código anterior con el mismo script. La puerta
+«cambio de velocidad ≤ 400 ms» no se cumple (≈1,0 s: es el primer frame de una
+sesión nueva); queda documentada sin aflojarla. 84 tests.
+
+**Fase 2 — atajos configurables.** `keymap.py` puro (inventario completo del
+diseño §3 con ids estables, acordes normalizados, evento Tk con Alt por
+plataforma y AltGr latino, conflictos, `keymap.json` con solo las diferencias) y
+`keymap_ui.KeymapSettings` en Ajustes (Grabar, ×, Restaurar, conflictos en rojo).
+`EditorMedios` cambia los bindings por keysym en los canvases por UN `<Key>` en el
+toplevel con guarda de foco y despacho solo del editor activo; `acciones_extra`
+reemplaza a `teclas_extra` (Automático migra sus cuatro acciones). Migración 1:1:
+la app se comporta igual con el keymap por defecto. Smoke Tk: teclas con el foco
+en un Entry no disparan; en el timeline sí; un atajo cambiado aplica sin
+reiniciar. 93 tests.
