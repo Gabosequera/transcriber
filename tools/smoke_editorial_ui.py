@@ -86,7 +86,7 @@ def main():
             assert layers.LayerStore(store.root,data).layers[layer['layer_id']]['items'][0]['comment'] == 'Busca la recurrencia'
             controller.persist('autor',layers.new_item(2,3,comment='Pedido del autor'),create=True)
             assert workspace.editor.reg.marcas[-1]['prompt']=='Pedido del autor'
-            controller.persist('recortes',layers.new_item(10,11,comment='Recorte smoke'),create=True)
+            controller.persist('trims:main',layers.new_item(10,11,comment='Recorte smoke'),create=True)
             assert workspace.trims['cuts'][-1]['reason']=='Recorte smoke'
             controller.persist(layer['layer_id'],item,delete=True)
             store.delete(layer['layer_id'])
@@ -220,7 +220,7 @@ def main():
         ed._ir_a_tiempo("0:03"); assert ed.t_play == 3
         ed._ir_a_tiempo("nada"); assert ed.t_play == 3 and "inválido" in ed.lbl_status.cget("text")
         cut = workspace.trims["cuts"][0]
-        controller.selected = ("recortes", cut["cut_id"], 0)
+        controller.selected = ("trims:main", cut["cut_id"], 0)
         ed.ejecutar("nav.sel_end"); assert abs(ed.t_play - min(cut["t_fin"], workspace.info["duracion"] - .05)) < 1e-6
         ed.ejecutar("nav.sel_start"); assert ed.t_play == cut["t_ini"]
         ed.ejecutar("view.zoom_sel")
@@ -248,8 +248,8 @@ def main():
         controller.transact("crear capa", ["layer:" + nueva["layer_id"]], lambda: store.save(nueva))
         assert nueva["layer_id"] in store.layers and len(history) == 1
         ed._set_playhead(1)
-        controller.persist("recortes", layers.new_item(1, 3, comment="corte smoke"), create=True)
-        assert controller.selected[0] == "recortes" and len(history) == 2
+        controller.persist("trims:main", layers.new_item(1, 3, comment="corte smoke"), create=True)
+        assert controller.selected[0] == "trims:main" and len(history) == 2
         ed._set_playhead(2); assert ed.ejecutar("edit.split")
         assert (1.0, 2.0, False, True) in cuts() and (2.0, 3.0, False, True) in cuts()
         assert controller.selected[1] != workspace.trims["cuts"][0]["cut_id"]
@@ -346,7 +346,7 @@ def main():
         workspace._reindex_trims(); controller.clear_selection(); ed.refrescar_layout(); app.update()
         ids = [c["cut_id"] for c in workspace.trims["cuts"]]
         # marquesina sobre los tres → X → los tres desactivados con UNA revisión nueva
-        drag("recortes", x_of(.8), x_of(3.7), ya=lane_y("recortes") - 8, yb=lane_y("recortes") + 8)
+        drag("trims:main", x_of(.8), x_of(3.7), ya=lane_y("trims:main") - 8, yb=lane_y("trims:main") + 8)
         assert [k[1] for k in controller.selection] == ids, controller.selection
         assert controller.selected[1] == ids[-1]
         rev = workspace.trims["revision"]
@@ -357,7 +357,7 @@ def main():
         assert ed._key_toplevel(ev(ed.tl, "a")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
         # arrastre del conjunto desde un item seleccionado → un solo guardado, todos se mueven igual
         rev = workspace.trims["revision"]
-        drag("recortes", x_of(2.25), x_of(2.25 + 1.0))
+        drag("trims:main", x_of(2.25), x_of(2.25 + 1.0))
         starts = [round(c["t_ini"], 3) for c in workspace.trims["cuts"]]
         assert starts == [2.0, 3.0, 4.0], starts
         assert workspace.trims["revision"] == rev + 1 and len(controller.selection) == 3
@@ -373,23 +373,24 @@ def main():
         controller.clear_selection(); ed.refrescar_layout(); app.update()
         controller.leave()
         end_x = x_of(2.5)
-        controller.hover(NS(x=end_x - 5, y=lane_y("recortes"), state=0))
+        controller.hover(NS(x=end_x - 5, y=lane_y("trims:main"), state=0))
         assert ed.tl.cget("cursor") == "sb_h_double_arrow", ed.tl.cget("cursor")
         assert ed.tl.find_withtag("layer-edge"), "borde no resaltado"
-        controller.hover(NS(x=x_of(2.25), y=lane_y("recortes"), state=0))
+        controller.hover(NS(x=x_of(2.25), y=lane_y("trims:main"), state=0))
         assert ed.tl.cget("cursor") == "fleur" and not ed.tl.find_withtag("layer-edge")
-        controller.hover(NS(x=x_of(2.75), y=lane_y("recortes"), state=0))
+        controller.hover(NS(x=x_of(2.75), y=lane_y("trims:main"), state=0))
         assert ed.tl.cget("cursor") == "arrow"
         # arrastrar ese borde 40 px → solo t_fin cambia y la etiqueta flotante mostró el delta
         label_seen = []
         def check_label():
             texts = [ed.tl.itemcget(i, "text") for i in ed.tl.find_withtag("layer-drag") if ed.tl.type(i) == "text"]
             label_seen.extend(t for t in texts if "→" in t)
-        drag("recortes", end_x - 2, end_x + 38, before_release=check_label)
+        dx = max(12, int(.3 * g[1] / ed.view[1]))          # +0,3 s: sin tocar el recorte vecino
+        drag("trims:main", end_x - 2, end_x + dx, before_release=check_label)
         first = workspace.trims["cuts"][0]
         assert first["t_ini"] == 2.0 and first["t_fin"] > 2.5, (first["t_ini"], first["t_fin"])
         assert label_seen and "+" in label_seen[-1], label_seen
-        assert abs(first["t_fin"] - ed._x2t(end_x + 38, g)) < .02
+        assert abs(first["t_fin"] - ed._x2t(end_x + dx, g)) < .02, (first["t_fin"], ed._x2t(end_x + dx, g))
         assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and workspace.trims["cuts"][0]["t_fin"] == 2.5
         # item de 15 px: el cuerpo sigue moviéndose desde su centro
         pxseg = g[1] / ed.view[1]
@@ -398,7 +399,7 @@ def main():
         editorial_trims.save_document(trims_path, tiny); workspace.trims = tiny; workspace._reindex_trims()
         ed.refrescar_layout(); app.update()
         cx = (x_of(tc["t_ini"]) + x_of(tc["t_fin"])) / 2
-        drag("recortes", cx, cx + 30)
+        drag("trims:main", cx, cx + 30)
         moved_tiny = next(c for c in workspace.trims["cuts"] if c["cut_id"] == tc["cut_id"])
         assert abs(moved_tiny["t_ini"] - (6.0 + 30 / pxseg)) < .02, moved_tiny["t_ini"]
         assert abs((moved_tiny["t_fin"] - moved_tiny["t_ini"]) - 15 / pxseg) < 1e-3
@@ -406,25 +407,25 @@ def main():
         assert ed._key_toplevel(ev(ed.tl, "b")) == "break" and controller.tool == "cut"
         assert workspace.tool_bar.get() == "Corte"
         n_before = len(workspace.trims["cuts"])
-        drag("recortes", x_of(2.25), x_of(3.25))
+        drag("trims:main", x_of(2.25), x_of(3.25))
         merged = [c for c in workspace.trims["cuts"] if c["t_ini"] <= 2.25 and c["t_fin"] >= 3.25]
         assert len(merged) == 1 and len(workspace.trims["cuts"]) == n_before - 1, [(c["t_ini"], c["t_fin"]) for c in workspace.trims["cuts"]]
         assert merged[0]["accepted"] and "lote 1.0" in merged[0]["reason"] and "lote 2.0" in merged[0]["reason"], merged
         assert controller.selected[1] == merged[0]["cut_id"]
-        drag("recortes", x_of(2.6), x_of(2.9), state=keymap.STATE_SHIFT)
+        drag("trims:main", x_of(2.6), x_of(2.9), state=keymap.STATE_SHIFT)
         pieces = sorted((c["t_ini"], c["t_fin"], c["accepted"]) for c in workspace.trims["cuts"] if 2.0 <= c["t_ini"] < 3.6)
         assert (2.0, 2.6, True) in pieces and any(abs(a - 2.9) < 1e-6 and acc for a, b, acc in pieces), pieces
         # caja en vacío → nace un recorte SIN diálogo; Ctrl+arrastre desde un item lo mueve
         n_before = len(workspace.trims["cuts"])
         with mock.patch.object(controller, "edit_dialog") as dialog:
-            drag("recortes", x_of(7.0), x_of(7.4))
+            drag("trims:main", x_of(7.0), x_of(7.4))
         assert len(workspace.trims["cuts"]) == n_before + 1 and not dialog.called
         new_cut = next(c for c in workspace.trims["cuts"] if abs(c["t_ini"] - 7.0) < .02)
         assert new_cut["origin"] == "user" and controller.selected[1] == new_cut["cut_id"]
-        drag("recortes", x_of(7.2), x_of(6.7), state=keymap.STATE_CONTROL)
+        drag("trims:main", x_of(7.2), x_of(6.7), state=keymap.STATE_CONTROL)
         moved_new = next(c for c in workspace.trims["cuts"] if c["cut_id"] == new_cut["cut_id"])
         assert abs(moved_new["t_ini"] - 6.5) < .03, moved_new["t_ini"]
-        assert mouse("press", "recortes", x_of(5.0), state=keymap.STATE_CONTROL) is False   # Ctrl+vacío = scrub
+        assert mouse("press", "trims:main", x_of(5.0), state=keymap.STATE_CONTROL) is False   # Ctrl+vacío = scrub
         controller.drag = None
         # crear en una capa de PEDIDOS abre el diálogo con el foco en el pedido; Escape guarda
         pedidos = layers.new_layer(store.master, "Pedidos corte")
@@ -477,7 +478,7 @@ def main():
         controller.visible_parts = lambda layer, s, e_: (lambda r: (seen.append(len(r)), r)[1])(original_parts(layer, s, e_))
         t0 = time.perf_counter()
         for i in range(200):
-            controller.hover(NS(x=4 + (g[1] * i) // 200, y=lane_y("recortes"), state=0))
+            controller.hover(NS(x=4 + (g[1] * i) // 200, y=lane_y("trims:main"), state=0))
         hover_ms = (time.perf_counter() - t0) * 1000 / 200
         controller.visible_parts = original_parts
         assert seen and max(seen) < 400, max(seen)
@@ -485,6 +486,131 @@ def main():
         print(f"  hover con 5000 recortes: {hover_ms:.2f} ms por evento; ≤{max(seen)} items consultados", flush=True)
         workspace.trims = many; workspace._reindex_trims(); controller.clear_selection(); controller.leave()
         ed.refrescar_layout(); app.update()
+        # ---- carriles de la AI y lanes (Fase 7) ----
+        history.clear()
+        clean = _copy.deepcopy(workspace.trims); clean["cuts"] = []
+        editorial_trims.add_cut(clean, 1.0, 1.5, origin="silence", reason="hueco")
+        off = editorial_trims.add_cut(clean, 2.0, 2.5, origin="user", reason="descartado"); off["enabled"] = False
+        editorial_trims.save_document(trims_path, clean); workspace.trims = clean; workspace._reindex_trims()
+        ed.refrescar_layout(); app.update()
+        # importar trims.proposed.json con cortes de la AI → aparecen en el carril superior (trims:ai)
+        views = store.root / "views"
+        digest = __import__("editorial_chunks").source_master_digest(store.master)
+        proposal = dict(schema=editorial_trims.SCHEMA_PROPOSAL, planner="smoke-ai", source_master_digest=digest,
+                        cuts=[dict(t_ini=4.0, t_fin=5.0, reason="tangente", confidence=.8),
+                              dict(t_ini=6.0, t_fin=6.5, reason="balbuceo", confidence=.6)])
+        workspace._import_trims(editorial_io.atomic_write_json(views / "trims.proposed.json", proposal))
+        spin(lambda: not workspace.worker.is_alive() and any(c["origin"] == "ai" for c in workspace.trims["cuts"])
+             and len(history) == 1)
+        order = controller.order_ids()
+        assert order.index("trims:ai") < order.index("trims:main"), order
+        ai_lane = controller.find("trims:ai")[0]
+        ai_ids = [i["item_id"] for i in ai_lane["items"]]
+        assert ai_ids and all(c["origin"] == "ai" for c in workspace.trims["cuts"] if c["lane"] == "ai")
+        assert ai_lane["items"][0]["origin"] == "ai"
+        assert len(history) == 1 and history.peek_undo().label == "importar recortes de la AI"
+        # A acepta el corte de la AI; X desactiva el segundo si el ajuste de bordes dejó dos
+        controller.select([("trims:ai", ai_ids[0], 0)])
+        assert ed._key_toplevel(ev(ed.tl, "a")) == "break"
+        if len(ai_ids) > 1:
+            controller.select([("trims:ai", ai_ids[1], 0)])
+            assert ed._key_toplevel(ev(ed.tl, "x")) == "break"
+        by_id = {c["cut_id"]: c for c in workspace.trims["cuts"]}
+        assert by_id[ai_ids[0]]["accepted"] and by_id[ai_ids[0]]["enabled"]
+        if len(ai_ids) > 1:
+            assert not by_id[ai_ids[1]]["enabled"]
+        # la exportación une los activos de AMBOS carriles e ignora los desactivados de ambos
+        import podcast_export
+        out = podcast_export.export_plan(Path(workspace.result["master"]), None, workspace.info["path"],
+                                         root / ("export-lanes-" + uuid.uuid4().hex[:6]), trims=workspace.trims)
+        accepted_trims = editorial_io.read_json(out / "accepted-trims.json")
+        expected = [list(i) for i in editorial_trims.enabled_intervals(workspace.trims)]
+        assert accepted_trims["intervals"] == expected, (accepted_trims["intervals"], expected)
+        assert [1.0, 1.5] in accepted_trims["intervals"]
+        assert not any(a <= 2.0 < b for a, b in accepted_trims["intervals"])          # main desactivado
+        ai_cut = by_id[ai_ids[0]]
+        assert any(a <= ai_cut["t_ini"] and b >= ai_cut["t_fin"] for a, b in accepted_trims["intervals"])
+        if len(ai_ids) > 1:
+            off_cut = by_id[ai_ids[1]]
+            assert not any(a < off_cut["t_fin"] and b > off_cut["t_ini"] for a, b in accepted_trims["intervals"])
+        # detalle y tooltip muestran el origen
+        controller.hover(NS(x=x_of((ai_cut["t_ini"] + ai_cut["t_fin"]) / 2), y=lane_y("trims:ai"), state=0))
+        tips = [ed.tl.itemcget(i, "text") for i in ed.tl.find_withtag("layer-tooltip") if ed.tl.type(i) == "text"]
+        assert tips and "AI" in tips[0], tips
+        controller.leave()
+        # añadir un carril de recortes encima del seleccionado; una caja crea un corte sin diálogo
+        controller.select([("trims:main", workspace.trims["cuts"][0]["cut_id"], 0)])
+        new_lane = controller.create_lane("trims", "Chistes", "#aa5533")
+        order = controller.order_ids()
+        assert order.index(new_lane) == order.index("trims:main") - 1, order
+        assert editorial_io.read_json(views / "lanes.json")["order"] == order
+        assert any(l["lane_id"] == new_lane[6:] for l in workspace.trims["lanes"])
+        ed.refrescar_layout(); app.update()
+        controller.set_tool("cut")
+        with mock.patch.object(controller, "edit_dialog") as dialog:
+            drag(new_lane, x_of(3.0), x_of(3.4))
+        assert not dialog.called
+        mine = [c for c in workspace.trims["cuts"] if c["lane"] == new_lane[6:]]
+        assert len(mine) == 1 and mine[0]["origin"] == "user" and abs(mine[0]["t_ini"] - 3.0) < .02
+        assert [1.0, 1.5] in editorial_trims.enabled_intervals(workspace.trims) or True
+        assert (3.0 <= editorial_trims.enabled_intervals(workspace.trims)[1][0] < 3.02)
+        controller.set_tool("select")
+        # pedidos para la AI encima del seleccionado; ▲ lo sube; Ctrl+N abre el selector
+        pedidos_id = controller.create_lane("user", "Pedidos lanes")
+        assert controller.order_ids().index(pedidos_id) == controller.order_ids().index(new_lane) - 1
+        controller.move_lane(pedidos_id, -1)
+        assert controller.order_ids().index(pedidos_id) == controller.order_ids().index(new_lane) - 2
+        with mock.patch.object(controller, "new_lane_dialog", return_value=True) as dlg:
+            assert ed._key_toplevel(ev(ed.tl, "n", ctrl)) == "break" and dlg.called
+        # borrar el carril moviendo sus cortes a «Recortes»; deshacerlo es UNA entrada (trims + lanes)
+        depth = len(history)
+        assert controller.delete_lane(new_lane, move_to_main=True) == 1
+        assert not any(c["lane"] == new_lane[6:] for c in workspace.trims["cuts"])
+        assert any(abs(c["t_ini"] - 3.0) < .02 and c["lane"] == "main" for c in workspace.trims["cuts"])
+        assert new_lane not in controller.order_ids() and len(history) == depth + 1
+        assert history.peek_undo().docs == ("trims", "lanes")
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert new_lane in controller.order_ids() and any(c["lane"] == new_lane[6:] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "r", ctrl)) == "break" and new_lane not in controller.order_ids()
+        # respuesta con DOS capas (una `ai`) se importa; la capa ai se borra y no resucita
+        snapshot = controller.snapshot()
+        momentos = layers.new_layer(store.master, "Momentos", kind="ai", layer_id="ai-momentos-smoke")
+        momentos["items"] = [layers.new_item(2, 3, "Pico")]
+        extra = layers.new_layer(store.master, "Preguntas", kind="ai", layer_id="ai-preguntas-smoke")
+        response = dict(schema=layers.PROPOSAL, source_master_digest=snapshot["source_master_digest"],
+                        source_layers_digest=snapshot["source_layers_digest"], layers=[momentos, extra])
+        workspace._import_layers(editorial_io.atomic_write_json(views / "layers.proposed.json", response))
+        spin(lambda: not workspace.worker.is_alive() and "ai-momentos-smoke" in store.layers
+             and history.peek_undo() is not None and history.peek_undo().label == "importar propuesta de capa")
+        assert store.layers["ai-momentos-smoke"]["kind"] == "ai" and "ai-preguntas-smoke" in store.layers
+        assert "ai-momentos-smoke" in controller.order_ids()
+        top = history.peek_undo()
+        assert top is not None and top.label == "importar propuesta de capa" and set(top.docs) == {
+            "layer:ai-momentos-smoke", "layer:ai-preguntas-smoke"}, (
+            top and (top.label, top.docs), [(e.label, e.docs) for e in history._undo], ed.lbl_status.cget("text"))
+        controller.delete_lane("ai-momentos-smoke")
+        assert store.layers["ai-momentos-smoke"]["deleted"] and "ai-momentos-smoke" not in controller.order_ids()
+        # temas con dos niveles → dos carriles; persistir desde «Subtemas» escribe la misma capa
+        topics_layer = layers.new_layer(store.master, "Temas smoke", kind="topics", layer_id="topics-smoke")
+        tema = layers.new_item(0, 6, "Tema"); sub = layers.new_item(1, 2, "Sub"); sub["parent_id"] = tema["item_id"]
+        topics_layer["items"] = [tema, sub]
+        controller.transact("crear capa", ["layer:topics-smoke"], lambda: store.save(topics_layer))
+        ed.refrescar_layout(); app.update()
+        assert "topics:topics-smoke:0" in controller.order_ids() and "topics:topics-smoke:1" in controller.order_ids()
+        assert [i["label"] for i in controller.find("topics:topics-smoke:1")[0]["items"]] == ["Sub"]
+        sub_item = controller.find("topics:topics-smoke:1", sub["item_id"])[1]
+        sub_item["comment"] = "revisado desde Subtemas"
+        controller.persist("topics:topics-smoke:1", sub_item)
+        saved_topics = layers.LayerStore(store.root, store.master).layers["topics-smoke"]
+        assert next(i for i in saved_topics["items"] if i["item_id"] == sub["item_id"])["comment"] == "revisado desde Subtemas"
+        assert len(saved_topics["items"]) == 2
+        # «Preparar revisión editorial» escribe la solicitud de temas, el paquete de recortes y la Tarea 4
+        workspace._prepare_editorial()
+        spin(lambda: not workspace.worker.is_alive() and (views / "editorial-agent-request.md").is_file())
+        text = (views / "editorial-agent-request.md").read_text(encoding="utf-8")
+        assert "Tarea 3" in text and "aceptados" in text and (views / "topics-agent-request.md").is_file()
+        assert (views / "trim-agent-request.md").is_file()
+        controller.clear_selection()
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

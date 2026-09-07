@@ -124,15 +124,21 @@ class SilenceHeuristicTests(unittest.TestCase):
         moved = document["cuts"][3]
         moved["t_ini"] += 1.0
         moved["edited"] = True                                       # movido por el usuario
-        editorial_trims.add_cut(document, 25.0, 26.0, origin="user", reason="manual")
+        editorial_trims.add_cut(document, 25.0, 26.0, origin="user", reason="manual")   # dentro de un silencio
+        editorial_trims.add_cut(document, 2.1, 2.6, origin="user", reason="aparte")     # en zona con voz
         editorial_trims.apply_silence_analysis(document, editorial_trims.analyze_silences(master))
         cuts = {cut["cut_id"]: cut for cut in document["cuts"]}
+        # el corte manual solapado se funde con el silencio del mismo carril (§10); el otro sigue aparte
         self.assertEqual(len(document["cuts"]), 7)
         self.assertFalse(cuts[ids[1]]["enabled"])
         self.assertTrue(cuts[ids[3]]["edited"])
         self.assertEqual(cuts[ids[3]]["t_ini"], moved["t_ini"])
         self.assertEqual(sum(cut["origin"] == "user" for cut in document["cuts"]), 1)
         self.assertEqual(sum(cut["origin"] == "silence" for cut in document["cuts"]), 6)
+        absorbed = next(cut for cut in document["cuts"] if cut["t_ini"] <= 25.0 <= cut["t_fin"])
+        self.assertEqual(absorbed["origin"], "silence")
+        self.assertIn("manual", absorbed["reason"])
+        self.assertTrue(all(cut["lane"] == "main" for cut in document["cuts"]))
 
 
 class DocumentTests(unittest.TestCase):

@@ -244,6 +244,28 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   exporta, así que no se hace; el actor impone origen y `accepted`, el motivo se
   concatena con « · ». `edit_dialog`: Escape y Ctrl+Enter guardan, la X también, el
   foco vuelve al timeline.
+- **Carriles de la AI y lanes** (Fase 7, §9/§10): `trims.json` gana dos campos
+  aditivos, `lanes: [{lane_id, name, color}]` (de fábrica `main` «Recortes» y `ai`
+  «Cortes sugeridos (AI)», `DEFAULT_LANES`) y `lane` en cada corte (ausente → derivado
+  del origen; `_normalize_lanes` declara sola las lanes que usan los cortes). `add_lane`,
+  `remove_lane(move_to="main"|None)`, `lanes()`; `merge_proposal` escribe en `ai` y
+  `apply_silence_analysis` en `main` por el origen. `editorial_layers.adapters` produce
+  un carril de UI por lane (`trims:<lane>`, `kind: "recortes"`); `split_by_depth`
+  presenta una capa `topics` como `topics:<id>:<profundidad>` («Temas», «Subtemas»,
+  «Subtemas 2»…) con `source_layer_id`; `source_layer_id()`/`lane_of()` mapean ids de UI
+  a documentos. Orden en `views/lanes.json` (`order_layers`: los ids guardados mandan,
+  los desconocidos se descartan, los nuevos van detrás de su vecino natural en el orden
+  por defecto Marcas · Bloques · Temas · Subtemas · AI · Recortes · capas;
+  `insert_above` = encima del seleccionado o arriba de los `trims:*`; `move_in_order`).
+  `validate_layer` admite `kind: "ai"`; `merge_responses` funde `layer` y/o
+  `layers: [...]` con las mismas protecciones (tumba incluida). Controlador:
+  `create_lane("trims"|"user")`, `delete_lane` (lane del usuario: mover a `main` o
+  borrar; capas: tumba), `rename_lane`, `move_lane` (▲▼), `new_lane_dialog` (Ctrl+N),
+  documento de historial `lanes`; `persist`/`persist_many`/`apply_box` resuelven la
+  lane por el id y fusionan solapes solo dentro de ella. `_prepare_editorial` escribe
+  la solicitud de temas, el paquete de recortes y `views/editorial-agent-request.md`
+  (Tarea 4: temas en dos pasadas y después recortes sin duplicar los aceptados). La
+  exportación no cambia: unión de `enabled` de todo el documento.
 - **hwaccel (Fase 5): probado, sin ganancia.** `-hwaccel d3d11va` sobre el VOD de
   referencia (30 s desde 1800 s, 1280×410): ×1 2,69 s de pared frente a 2,24 s por
   software; ×4 1,90 s frente a 2,00 s; primer frame ~1,00 s frente a ~0,85 s.
@@ -391,6 +413,12 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   dicen a ×2–×4); a ×1 la línea de ffmpeg es EXACTAMENTE la de siempre (sin filtro).
   `AudioClock.position()` sigue devolviendo None con muestra vieja (> 0,5 s de pared).
   El cambio de velocidad es una re-sesión con debounce, sin hilos ni timers nuevos.
+- **`trims.json` es el único documento de recortes**: los carriles de recortes, de
+  fábrica o del usuario, son `lanes` del mismo archivo; la capa `topics` es una sola
+  (los carriles por profundidad son presentación); `views/lanes.json` es solo orden y
+  se reconstruye. Los cambios de esquema son aditivos (`accepted`, `lane`, `lanes`,
+  `kind: "ai"`, `layers: [...]`) y todo archivo antiguo carga sin migración. La fusión
+  de solapes nunca cruza carriles ni estados `enabled`.
 - **Todo cambio escrito desde el timeline queda en el historial**: si añades un punto
   de escritura, envuélvelo en `LayersController.transact` (o registra en el hilo de UI
   con el `before` tomado antes del worker) y prueba su undo/redo. Restaurar siempre por
@@ -469,7 +497,10 @@ Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-ed
   `coalesce`. Medido en el smoke (medio sintético de 8 s): mover 120 recortes
   seleccionados en una escritura, 43 ms hasta redibujar; hover con 5.000 recortes
   solapados, 2,2 ms por evento consultando ≤ 334 items del índice, nunca la lista entera.
-- **Pendiente:** Fase 7, carriles de la AI y lanes de `trims.json`.
+- **Fase 7 (hecha)** — lanes de `trims.json` con carga de archivos antiguos, carriles
+  por profundidad de `topics`, `views/lanes.json`, «Añadir capa» de dos tipos (Ctrl+N),
+  `kind: "ai"`, respuestas con varias capas, «Preparar revisión editorial» (Tarea 4).
+- **Cerrado:** las siete fases del diseño están implementadas; 0.3.3 preparada.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

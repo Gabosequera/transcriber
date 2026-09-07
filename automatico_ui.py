@@ -13,6 +13,7 @@ import customtkinter as ctk
 
 import dialogs
 import editorial_chunks
+import editorial_layers
 import editorial_pipeline
 import editorial_trims
 import hardware
@@ -454,6 +455,9 @@ class AutomaticWorkspace:
             row=16, column=0, sticky="ew", padx=14, pady=5)
         ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
             row=17, column=0, sticky="ew", padx=14, pady=5)
+        ctk.CTkButton(panel, text="Preparar revisión editorial (Tarea 4)", fg_color="#4a3a5e",
+                      hover_color="#5a4772", command=self._prepare_editorial).grid(
+            row=18, column=0, sticky="ew", padx=14, pady=(5, 12))
 
     def _tool_picked(self, label):
         self.layers.set_tool("cut" if label == "Corte" else "select")
@@ -836,6 +840,7 @@ class AutomaticWorkspace:
                 elif kind == "layers_loaded":
                     if str(self._master_path()) == event["master"]:
                         self.layers.store = event["store"]
+                        self.layers.lane_order = editorial_layers.load_lane_order(event["store"].root)
                         self.layers.history.clear()          # historial por medio cargado
                         self.editor.refrescar_layout()
                 elif kind == "layers_imported":
@@ -1373,6 +1378,28 @@ class AutomaticWorkspace:
         self._append_log("Tarea 3 lista: views/topics-agent-request.md. "
                          + ("Ámbito: bloque seleccionado." if scope else "Ámbito: medio completo.")
                          + " Pide a la AI ambas pasadas; la app valida el mapa entre ellas.")
+
+    def _prepare_editorial(self):
+        """Un solo pedido a la AI (§9): temas (pasada 1) + paquete de revisión de
+        recortes + views/editorial-agent-request.md con el orden de la Tarea 4."""
+        master = self._master_path()
+        if not self.layers.store or not master or self.trims is None:
+            self._append_log("Para preparar la revisión editorial hace falta la metadata y los recortes.")
+            return
+        import editorial_topics
+        snapshot = self.layers.snapshot()
+        root = self.layers.store.root
+        request = editorial_topics.prepare(root, self.layers.store.master, snapshot)
+        self._last_topics_stamp = None
+        plan, document = self.plan, self.trims
+
+        def work():
+            data = read_json(master)
+            paths = editorial_trims.write_review_package(root, data, plan, document)
+            path = editorial_trims.write_editorial_request(root, data, plan, document, request)
+            self.events.put({"tipo": "review_written", "request": path})
+        self._review_stale = False
+        self._background(work)
 
     def _import_topics(self, path):
         if not self.layers.store:

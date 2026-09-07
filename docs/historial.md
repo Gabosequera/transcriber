@@ -591,3 +591,21 @@ no seleccionado; arrastrar ese borde solo cambia `t_fin` y muestra el delta; un
 item de 15 px se mueve desde el centro; crear en una capa de pedidos abre el
 diálogo con el foco en el pedido; Ctrl+Z deshace cada gesto entero. Mover 120
 recortes: 43 ms; hover con 5.000 recortes: 2,2 ms. 112 tests.
+
+**Fase 7 — carriles de la AI y lanes de `trims.json`.** El documento de recortes
+gana `lanes` y `lane` (aditivos; los archivos viejos cargan derivando el carril del
+origen), `add_lane`/`remove_lane`, fusión de solapes también en las importaciones
+(silencios y propuestas de la AI, dentro de su carril). `editorial_layers` produce
+un carril de UI por lane (`trims:<lane>`), presenta la capa `topics` por profundidad
+(`topics:<id>:<n>`: Temas, Subtemas…), ordena por `views/lanes.json`
+(desconocidos fuera, nuevos junto a su vecino natural, «encima del seleccionado»),
+admite `kind: "ai"` y funde respuestas con `layers: [...]`. Controlador: añadir
+capa (Ctrl+N, dos tipos), borrar carril (mover a «Recortes» o borrar), renombrar,
+▲▼, documento de historial `lanes`; origen en la barra de detalle y el tooltip.
+Botón «Preparar revisión editorial» (Tarea 4: temas en dos pasadas y luego
+recortes sin duplicar los aceptados) y Tarea 4 en la skill. Smoke Tk: propuesta
+de la AI → carril superior, A acepta, X desactiva, la exportación une los activos
+de ambos carriles e ignora los desactivados; carril nuevo encima del seleccionado,
+caja sin diálogo, borrar moviendo a «Recortes» y deshacerlo como UNA entrada;
+respuesta de dos capas `ai`; temas con dos niveles y persistir desde «Subtemas».
+121 tests. `VERSION` → 0.3.3 («prepara 0.3.3»).

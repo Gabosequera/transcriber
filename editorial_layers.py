@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from editorial_io import atomic_write_json, digest_json, finite_time, read_json
+import editorial_trims
 from editorial_trims import identity, same_identity
 from editorial_chunks import source_master_digest
 
@@ -133,7 +134,7 @@ def validate_layer(layer, master):
         raise ValueError("layer_id inválido o reservado")
     if not same_identity(layer.get("media_fingerprint"), master["media"]["fingerprint"]):
         raise ValueError("la capa pertenece a otro medio")
-    if layer.get("kind") not in ("user", "topics"):
+    if layer.get("kind") not in ("user", "topics", "ai"):
         raise ValueError("tipo de capa desconocido")
     if not isinstance(layer.get("name"), str) or not layer["name"].strip():
         raise ValueError("falta el nombre de la capa")
@@ -194,10 +195,143 @@ def adapters(master, *, plan=None, trims=None, marks=None):
             comment=c.get("comment", c.get("summary", "")), state="proposed", edited=c.get("edited", False),
             ranges=[dict(t_ini=c["t_ini"], t_fin=c["t_fin"])]) for c in plan["chunks"]])
     if trims is not None:
-        layer("recortes", "Recortes", "#728bd0", [dict(item_id=c["cut_id"], label=c["cut_id"],
-            comment=c["reason"], state=cut_state(c), edited=c["edited"],
-            origin=c["origin"], ranges=[dict(t_ini=c["t_ini"], t_fin=c["t_fin"])]) for c in trims["cuts"]])
+        # un carril de UI por `lane` del mismo trims.json (§10): «ai» encima de «main»
+        by_lane = {}
+        for c in trims["cuts"]:
+            by_lane.setdefault(editorial_trims.cut_lane(c), []).append(c)
+        for lane in editorial_trims.lanes(trims):
+            items = [dict(item_id=c["cut_id"], label=c["cut_id"], comment=c["reason"],
+                          state=cut_state(c), edited=c["edited"], origin=c["origin"],
+                          ranges=[dict(t_ini=c["t_ini"], t_fin=c["t_fin"])])
+                     for c in by_lane.get(lane["lane_id"], [])]
+            result.append(dict(schema=SCHEMA, layer_id=trims_lane_id(lane["lane_id"]), kind="recortes",
+                               lane=lane["lane_id"], name=lane["name"], color=lane["color"], items=items,
+                               media_fingerprint=identity(master["media"]["fingerprint"])))
     return result
+
+
+def trims_lane_id(lane_id: str) -> str:
+    return f"trims:{lane_id}"
+
+
+def lane_of(layer_id: str) -> str | None:
+    """`trims:<lane>` → `<lane>`; otro id → None."""
+    return layer_id[6:] if isinstance(layer_id, str) and layer_id.startswith("trims:") else None
+
+
+def item_depth(items_by_id: dict, item: dict) -> int:
+    depth, parent = 0, item.get("parent_id")
+    seen = set()
+    while parent and parent in items_by_id and parent not in seen:
+        seen.add(parent)
+        depth += 1
+        parent = items_by_id[parent].get("parent_id")
+    return depth
+
+
+def split_by_depth(layer: dict) -> list[dict]:
+    """Una capa `topics` se PRESENTA como varios carriles por profundidad (§9):
+    «Temas» (sin padre), «Subtemas» (1), «Subtemas 2»… Cada carril sabe a qué
+    `layer_id` pertenece (`source_layer_id`); la capa guardada sigue siendo una."""
+    if layer.get("kind") != "topics":
+        return [layer]
+    by_id = {i["item_id"]: i for i in layer["items"]}
+    buckets = {}
+    for item in layer["items"]:
+        buckets.setdefault(item_depth(by_id, item), []).append(item)
+    depths = sorted(buckets) or [0]
+    result = []
+    for depth in depths:
+        name = "Temas" if depth == 0 else "Subtemas" if depth == 1 else f"Subtemas {depth}"
+        result.append({**layer, "layer_id": f"topics:{layer['layer_id']}:{depth}",
+                       "source_layer_id": layer["layer_id"], "depth": depth, "name": name,
+                       "items": buckets.get(depth, [])})
+    return result
+
+
+def source_layer_id(layer_id: str) -> str:
+    """`topics:<id>:<n>` → `<id>`; cualquier otro id de capa propia se devuelve tal cual."""
+    if isinstance(layer_id, str) and layer_id.startswith("topics:"):
+        return layer_id.split(":")[1]
+    return layer_id
+
+
+# ---- orden de carriles (views/lanes.json, §10): solo presentación, reconstruible ----
+LANES_VIEW = "editorial-lanes-view/1"
+
+
+def _default_rank(layer: dict) -> tuple:
+    lid = layer["layer_id"]
+    if lid == "autor":
+        return (0, 0, "")
+    if lid == "bloques":
+        return (1, 0, "")
+    if lid.startswith("topics:"):
+        return (2, int(layer.get("depth", 0)), layer.get("source_layer_id", ""))
+    if lid == "trims:ai":
+        return (3, 0, "")
+    if lid == "trims:main":
+        return (4, 0, "")
+    if lid.startswith("trims:"):
+        return (3, 1, lid)
+    return (5, 0, lid)
+
+
+def order_layers(ui_layers: list[dict], saved_order: list | None) -> list[dict]:
+    """Ordena los carriles de UI según `saved_order` (ids); los desconocidos del orden
+    se descartan y los carriles sin entrada van a su posición por defecto (Marcas del
+    autor · Bloques · Temas · Subtemas · Cortes sugeridos (AI) · Recortes · capas)."""
+    by_id = {l["layer_id"]: l for l in ui_layers}
+    ordered = [by_id[i] for i in dict.fromkeys(saved_order or []) if i in by_id]
+    placed = {l["layer_id"] for l in ordered}
+    for layer in sorted(ui_layers, key=_default_rank):
+        if layer["layer_id"] in placed:
+            continue
+        rank = _default_rank(layer)
+        # detrás del ÚLTIMO carril ya colocado de rango menor o igual (su vecino
+        # natural); si no hay ninguno, al principio
+        index = next((k + 1 for k in range(len(ordered) - 1, -1, -1)
+                      if _default_rank(ordered[k]) <= rank), 0)
+        ordered.insert(index, layer)
+        placed.add(layer["layer_id"])
+    return ordered
+
+
+def insert_above(order: list, new_id: str, selected_id) -> list:
+    """Posición de una capa nueva: justo antes del carril seleccionado; sin selección,
+    arriba de los carriles de recortes (`trims:*`); si no hay, al final."""
+    order = [i for i in order if i != new_id]
+    if selected_id in order:
+        index = order.index(selected_id)
+    else:
+        index = next((k for k, i in enumerate(order) if str(i).startswith("trims:")), len(order))
+    return order[:index] + [new_id] + order[index:]
+
+
+def move_in_order(order: list, layer_id: str, delta: int) -> list:
+    order = list(order)
+    if layer_id not in order:
+        return order
+    index = order.index(layer_id)
+    target = max(0, min(len(order) - 1, index + delta))
+    order.insert(target, order.pop(index))
+    return order
+
+
+def load_lane_order(root) -> list:
+    path = Path(root) / "views" / "lanes.json"
+    try:
+        data = read_json(path) if path.is_file() else None
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict) or not isinstance(data.get("order"), list):
+        return []
+    return [str(i) for i in data["order"]]
+
+
+def save_lane_order(root, order: list) -> Path:
+    return atomic_write_json(Path(root) / "views" / "lanes.json",
+                             {"schema": LANES_VIEW, "order": [str(i) for i in order]})
 
 
 def cut_state(cut: dict) -> str:
@@ -217,14 +351,50 @@ def write_snapshot(root, master, layers, *, master_digest=None):
     return value
 
 
-def merge_response(store, proposal, snapshot):
+def proposal_layers(proposal) -> list:
+    """`layer` (compatibilidad) y/o `layers: [...]` de una respuesta (§9)."""
+    result = []
+    if isinstance(proposal.get("layer"), dict):
+        result.append(proposal["layer"])
+    extra = proposal.get("layers")
+    if extra is not None:
+        if not isinstance(extra, list) or not all(isinstance(l, dict) for l in extra):
+            raise ValueError("layers debe ser una lista de capas")
+        result.extend(extra)
+    if not result:
+        raise ValueError("la respuesta no trae ninguna capa")
+    seen = set()
+    for layer in result:
+        if layer.get("layer_id") in seen:
+            raise ValueError("layer_id repetido en la respuesta")
+        seen.add(layer.get("layer_id"))
+    return result
+
+
+def merge_responses(store, proposal, snapshot) -> list:
+    """Funde CADA capa de la respuesta con las mismas protecciones que una sola
+    (items editados o borrados por el humano nunca se pisan; tumba persistente)."""
     if proposal.get("schema") != PROPOSAL:
         raise ValueError("schema de respuesta de capas desconocido")
     if proposal.get("source_master_digest") != store.source_digest:
         raise ValueError("propuesta para otro master")
     if proposal.get("source_layers_digest") != snapshot["source_layers_digest"]:
         raise ValueError("las capas cambiaron; prepara otra revisión AI")
-    layer = validate_layer(proposal["layer"], store.master)
+    validated = [validate_layer(layer, store.master) for layer in proposal_layers(proposal)]
+    for layer in validated:
+        old = store.layers.get(layer["layer_id"])
+        if old and old.get("deleted"):
+            raise ValueError(f"la capa {layer['layer_id']} fue borrada por el usuario")
+    return [_merge_layer(store, layer) for layer in validated]
+
+
+def merge_response(store, proposal, snapshot):
+    """Compatibilidad: devuelve la capa fundida cuando la respuesta trae una sola."""
+    merged = merge_responses(store, proposal, snapshot)
+    return merged[0] if len(merged) == 1 else merged
+
+
+def _merge_layer(store, layer):
     old = store.layers.get(layer["layer_id"])
     if old:
         if old.get("deleted"):

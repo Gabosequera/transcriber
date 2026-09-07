@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import bisect
+import re
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import messagebox
@@ -118,6 +119,9 @@ class LayerDetailBar:
                  fill=colors["raised"], outline=badge_color)
         canvas.create_text(x + badge_width / 2, cy, text=badge, fill=badge_color, font=self.f_badge)
         x += badge_width + 10
+        origin = {"silence": "silencio", "ai": "AI", "user": "tuyo"}.get(item.get("origin"))
+        if origin:
+            x = self._text(x, cy, origin, self.f_small, self.ORIGINS[item["origin"]], width * .1) + 10
         x = self._text(x, cy, layers.ranges_summary(item["ranges"]), self.f_text,
                        colors["muted"], width * .3) + 12
         right = width - 12
@@ -157,6 +161,7 @@ class LayersController:
         self.tool = "select"
         self.selection = []   # [(layer_id, item_id, segment)] ordenada por tiempo, un carril
         self.on_tool_change = None
+        self.lane_order = []      # views/lanes.json (solo presentación, reconstruible)
         self._lane_y = {}
         self._hover_state = None
         self._cursor = None
@@ -172,6 +177,8 @@ class LayersController:
             return copy.deepcopy(w.trims)
         if doc == "plan":
             return copy.deepcopy(w.plan)
+        if doc == "lanes":
+            return list(self.lane_order)
         if doc.startswith("layer:"):
             layer = self.store.layers.get(doc[6:]) if self.store else None
             return copy.deepcopy(layer)
@@ -205,6 +212,8 @@ class LayersController:
             w._review_stale = True
             w._reindex_trims()
             w._refresh_trims_status()
+        elif doc == "lanes":
+            self._save_order(list(snapshot or []))
         elif doc == "plan":
             if snapshot is None:
                 raise ValueError("el plan no existía; su importación no se deshace")
@@ -239,7 +248,16 @@ class LayersController:
         return result
 
     def _lane_doc(self, lid):
-        return {"autor": "autor", "recortes": "trims", "bloques": "plan"}.get(lid, f"layer:{lid}")
+        if lid.startswith("trims:"):
+            return "trims"
+        return {"autor": "autor", "bloques": "plan"}.get(lid, f"layer:{layers.source_layer_id(lid)}")
+
+    def _store_layer(self, lid):
+        """Capa GUARDADA detrás de un carril de UI (`topics:<id>:<n>` → `<id>`)."""
+        return self.store.layers[layers.source_layer_id(lid)]
+
+    def order_ids(self):
+        return [l["layer_id"] for l in self.all()]
 
     def _after_write(self):
         """Tras escribir o restaurar: la selección solo sobrevive si el item existe."""
@@ -304,11 +322,15 @@ class LayersController:
         reg = self.w.editor.reg
         key=(id(self.store),id(self.w.plan),id(self.w.trims),
              self.w.trims.get('revision') if self.w.trims else None,
-             id(reg),reg.revision if reg else None,tuple(sorted(self.store.stamps.items())))
+             id(reg),reg.revision if reg else None,tuple(sorted(self.store.stamps.items())),
+             tuple(self.lane_order))
         if key != self._cache_key:
             self._cache_key=key
-            self._cache=layers.adapters(self.store.master, plan=self.w.plan, trims=self.w.trims,
-                                       marks=reg.marcas if reg else []) + self.store.visible()
+            ui = layers.adapters(self.store.master, plan=self.w.plan, trims=self.w.trims,
+                                 marks=reg.marcas if reg else [])
+            for layer in self.store.visible():
+                ui.extend(layers.split_by_depth(layer))      # temas/subtemas por profundidad (§9)
+            self._cache = layers.order_layers(ui, self.lane_order)
             self._draw_indexes = {}
             for layer in self._cache:
                 entries=sorted(((r['t_ini'],r['t_fin'],item,index)
@@ -712,7 +734,7 @@ class LayersController:
         for item in items:
             layers.validate_items([dict(item, parent_id=None)], duration, allow_points=lid == "autor")
             item["edited"] = True
-            if lid in ("autor", "recortes", "bloques") and len(item["ranges"]) != 1:
+            if (lid in ("autor", "bloques") or lid.startswith("trims:")) and len(item["ranges"]) != 1:
                 raise ValueError("esta capa admite un rango por item")
         if lid == "bloques":
             raise ValueError("los bloques no admiten operaciones en lote (cobertura continua)")
@@ -740,7 +762,7 @@ class LayersController:
                         mark.update(t_ini=a, t_fin=b, decision=decision, prompt=item["comment"] or None,
                                     label=item["label"])
                 reg.reemplazar(marks)
-            elif lid == "recortes":
+            elif lid.startswith("trims:"):
                 document = copy.deepcopy(self.w.trims)
                 by_id = {c["cut_id"]: c for c in document["cuts"]}
                 for item in items:
@@ -755,14 +777,14 @@ class LayersController:
                                enabled=item["state"] != "disabled",
                                accepted=item["state"] == "accepted", edited=True)
                 if not delete:
-                    editorial_trims.coalesce(document)
+                    editorial_trims.coalesce(document, lane=layers.lane_of(lid))
                 editorial_trims.save_document(self.w.trims_path, document)
                 self.w.trims = document
                 self.w._review_stale = True
                 self.w._reindex_trims()
                 self.w._refresh_trims_status()
             else:
-                layer = copy.deepcopy(self.store.layers[lid])
+                layer = copy.deepcopy(self._store_layer(lid))
                 if delete:
                     removed = {i["item_id"] for i in items}
                     while True:
@@ -800,13 +822,15 @@ class LayersController:
         created = []
 
         def do():
-            if lid == "recortes":
+            if lid.startswith("trims:"):
+                lane = layers.lane_of(lid)
                 document = copy.deepcopy(self.w.trims)
                 by_id = {c["cut_id"]: c for c in document["cuts"]}
                 actor = None
                 for op in ops:
                     if op[0] == "create":
-                        cut = editorial_trims.add_cut(document, op[1], op[2], origin="user", edited=True)
+                        cut = editorial_trims.add_cut(document, op[1], op[2], origin="user", edited=True,
+                                                      lane=lane)
                         created.append(cut["cut_id"])
                         actor = cut["cut_id"]
                     elif op[0] == "update":
@@ -817,11 +841,10 @@ class LayersController:
                     elif op[0] == "split":
                         cut = by_id[op[1]]
                         cut.update(t_ini=op[2][0], t_fin=op[2][1], edited=True)
-                        twin = editorial_trims.add_cut(document, op[3][0], op[3][1], origin=cut["origin"],
-                                                       reason=cut.get("reason", ""), enabled=cut["enabled"],
-                                                       accepted=cut.get("accepted", False), edited=True)
-                        if cut.get("lane"):
-                            twin["lane"] = cut["lane"]
+                        editorial_trims.add_cut(document, op[3][0], op[3][1], origin=cut["origin"],
+                                                reason=cut.get("reason", ""), enabled=cut["enabled"],
+                                                accepted=cut.get("accepted", False), edited=True,
+                                                lane=cut.get("lane") or lane)
                     elif op[0] == "merge":
                         survivor = by_id[op[1]]
                         others = [by_id[i] for i in op[2]]
@@ -832,7 +855,7 @@ class LayersController:
                             document["cuts"].remove(other)
                         actor = op[1]
                 if not subtract:
-                    editorial_trims.coalesce(document, actor_id=actor)
+                    editorial_trims.coalesce(document, lane=lane, actor_id=actor)
                 editorial_trims.save_document(self.w.trims_path, document)
                 self.w.trims = document
                 self.w._review_stale = True
@@ -877,7 +900,7 @@ class LayersController:
                             marks.remove(other)
                 reg.reemplazar(marks)
             else:
-                layer_doc = copy.deepcopy(self.store.layers[lid])
+                layer_doc = copy.deepcopy(self._store_layer(lid))
                 by_id = {i["item_id"]: i for i in layer_doc["items"]}
                 removed = set()
                 for op in ops:
@@ -921,9 +944,158 @@ class LayersController:
         self._after_write()
         # crear en una capa de PEDIDOS abre el diálogo con el foco en el pedido (§10);
         # en un carril de recortes queda creado sin diálogo
-        if created and lid not in ("recortes", "autor") and self.store.layers.get(lid, {}).get("kind") == "user":
+        if created and not lid.startswith("trims:") and lid != "autor" and \
+                self.store.layers.get(layers.source_layer_id(lid), {}).get("kind") in ("user", "ai"):
             self.edit_dialog(focus="comment")
         return ops
+
+    # ---- carriles: añadir, borrar, reordenar (§10) ----
+    def _save_order(self, order):
+        self.lane_order = [str(i) for i in order]
+        layers.save_lane_order(self.store.root, self.lane_order)
+
+    def create_lane(self, kind, name, color="#c58e43"):
+        """«Añadir capa»: `kind` «trims» = un carril nuevo dentro de trims.json (dibujar
+        una caja crea un corte sin diálogo); «user» = una capa de pedidos para la AI.
+        Se inserta encima del carril seleccionado (o arriba de los de recortes)."""
+        if self.w.worker and self.w.worker.is_alive():
+            raise ValueError("espera a que termine la operación del proyecto")
+        name = (name or "").strip()
+        if not name:
+            raise ValueError("ponle un nombre a la capa")
+        selected = self.selected[0] if self.selected else None
+        if kind == "trims":
+            if self.w.trims is None or self.w.trims_path is None:
+                raise ValueError("todavía no hay documento de recortes (importa o procesa el medio)")
+            document = copy.deepcopy(self.w.trims)
+            lane = editorial_trims.add_lane(document, name, color=color)
+            new_id = layers.trims_lane_id(lane["lane_id"])
+
+            def do():
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._reindex_trims()
+                self.w._refresh_trims_status()
+                self._save_order(layers.insert_above(self.order_ids() + [new_id], new_id, selected))
+            self.transact("añadir carril de recortes", ["trims", "lanes"], do)
+        elif kind == "user":
+            layer = layers.new_layer(self.store.master, name, master_digest=self.store.source_digest)
+            layer["color"] = color
+            new_id = layer["layer_id"]
+
+            def do():
+                self.store.save(layer)
+                self._save_order(layers.insert_above(self.order_ids() + [new_id], new_id, selected))
+            self.transact("crear capa", ["layer:" + new_id, "lanes"], do)
+        else:
+            raise ValueError(f"tipo de capa desconocido: {kind}")
+        self.clear_selection(new_id)
+        self._after_write()
+        return new_id
+
+    def delete_lane(self, lid, *, move_to_main=True):
+        """Borra un carril de UI: uno de recortes del usuario (sus cortes van a «main»
+        o se borran), una capa propia o de la AI (tumba persistente)."""
+        if self.w.worker and self.w.worker.is_alive():
+            raise ValueError("espera a que termine la operación del proyecto")
+        if lid.startswith("trims:"):
+            lane = layers.lane_of(lid)
+            document = copy.deepcopy(self.w.trims)
+            moved = editorial_trims.remove_lane(document, lane, move_to="main" if move_to_main else None)
+
+            def do():
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._review_stale = True
+                self.w._reindex_trims()
+                self.w._refresh_trims_status()
+                self._save_order([i for i in self.lane_order if i != lid])
+            self.transact("borrar carril de recortes", ["trims", "lanes"], do)
+            self.clear_selection()
+            self._after_write()
+            return moved
+        source = layers.source_layer_id(lid)
+        layer = self.store.layers.get(source)
+        if layer is None or layer["kind"] not in ("user", "topics", "ai"):
+            raise ValueError("capa del proyecto: sus items se editan en el timeline")
+        ids = [l["layer_id"] for l in self.all() if layers.source_layer_id(l["layer_id"]) == source]
+
+        def do():
+            self.store.delete(source)
+            self._save_order([i for i in self.lane_order if i not in ids])
+        self.transact("borrar capa", ["layer:" + source, "lanes"], do)
+        self.clear_selection()
+        self._after_write()
+        return len(layer["items"])
+
+    def rename_lane(self, lid, name=None, color=None):
+        name = (name or "").strip() or None
+        if lid.startswith("trims:"):
+            lane = layers.lane_of(lid)
+            document = copy.deepcopy(self.w.trims)
+            entry = next(l for l in editorial_trims.lanes(document) if l["lane_id"] == lane)
+            if name:
+                entry["name"] = name
+            if color:
+                if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                    raise ValueError("color inválido (#RRGGBB)")
+                entry["color"] = color
+            document["lanes"] = [entry if l["lane_id"] == lane else l for l in editorial_trims.lanes(document)]
+
+            def do():
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._reindex_trims()
+            self.transact("renombrar carril", ["trims"], do)
+        else:
+            source = layers.source_layer_id(lid)
+            layer = copy.deepcopy(self.store.layers[source])
+            if layer["kind"] not in ("user", "topics", "ai"):
+                raise ValueError("capa del proyecto: sus items se editan en el timeline")
+            layer.update(name=name or layer["name"], color=color or layer["color"])
+            self.transact("renombrar capa", ["layer:" + source], lambda: self.store.save(layer))
+        self._after_write()
+
+    def move_lane(self, lid, delta):
+        """▲ / ▼ en «Capas y comentarios»: reordena el carril (solo presentación)."""
+        order = layers.move_in_order(self.order_ids(), lid, delta)
+        self.transact("reordenar carriles", ["lanes"], lambda: self._save_order(order))
+        self._after_write()
+
+    def new_lane_dialog(self):
+        """Ctrl+N / «Añadir capa»: selector de tipo (Recortes / Pedidos para la AI)."""
+        if not self.store:
+            return True
+        win = ctk.CTkToplevel(self.w.f)
+        win.title("Añadir capa")
+        win.geometry("420x250")
+        win.transient(self.w.f.winfo_toplevel())
+        kind = ctk.CTkSegmentedButton(win, values=["Recortes", "Pedidos para la AI"])
+        kind.set("Recortes")
+        kind.pack(fill="x", padx=15, pady=(15, 6))
+        ctk.CTkLabel(win, text="Recortes: dibujar una caja crea un corte que cuenta para la exportación. "
+                               "Pedidos para la AI: cada caja abre el pedido para la AI.",
+                     wraplength=380, justify="left", text_color="gray60").pack(padx=15, anchor="w")
+        name = ctk.CTkEntry(win, placeholder_text="Nombre de la capa")
+        name.pack(fill="x", padx=15, pady=(8, 4))
+        color = ctk.CTkEntry(win, placeholder_text="Color #RRGGBB")
+        color.insert(0, "#c58e43")
+        color.pack(fill="x", padx=15, pady=(0, 8))
+
+        def create(_e=None):
+            try:
+                self.create_lane("trims" if kind.get() == "Recortes" else "user", name.get(), color.get().strip())
+                win.destroy()
+                self.w.editor.tl.focus_set()
+            except Exception as error:
+                messagebox.showerror("Añadir capa", str(error), parent=win)
+            return "break"
+        ctk.CTkButton(win, text="Crear encima del carril seleccionado", command=create).pack(pady=6)
+        win.bind("<Return>", create)
+        win.bind("<Escape>", lambda e: (win.destroy(), self.w.editor.tl.focus_set()))
+        win.update_idletasks()
+        name.focus_force()
+        return True
 
     def nudge_selection(self, frames):
         """Flechas con varios seleccionados / Alt+flechas: mueve el conjunto ±n
@@ -988,7 +1160,7 @@ class LayersController:
         layers.validate_items([dict(item, parent_id=None)], self.store.master["media"]["duration"], allow_points=lid=="autor")
         item = copy.deepcopy(item)
         item["edited"] = True
-        if lid in ("autor", "recortes", "bloques") and len(item["ranges"]) != 1:
+        if (lid in ("autor", "bloques") or lid.startswith("trims:")) and len(item["ranges"]) != 1:
             raise ValueError("esta capa admite un rango por item")
         if lid == "autor":
             reg = editor.reg
@@ -1010,7 +1182,8 @@ class LayersController:
             else:
                 reg.editar(mark, tipo="region", t_ini=a, t_fin=b, decision=decision,
                            prompt=item["comment"], label=item["label"])
-        elif lid == "recortes":
+        elif lid.startswith("trims:"):
+            lane = layers.lane_of(lid)
             document = copy.deepcopy(self.w.trims)
             cut = next((c for c in document["cuts"] if c["cut_id"] == item["item_id"]), None)
             if delete:
@@ -1018,10 +1191,11 @@ class LayersController:
             else:
                 part = item["ranges"][0]
                 if create:
-                    cut = editorial_trims.add_cut(document, part["t_ini"], part["t_fin"])
+                    cut = editorial_trims.add_cut(document, part["t_ini"], part["t_fin"], lane=lane)
                     item["item_id"] = cut["cut_id"]
                 cut.update(**part, reason=item["comment"], enabled=item["state"] != "disabled",
                            accepted=item["state"] == "accepted", edited=True)
+                editorial_trims.coalesce(document, lane=lane, actor_id=cut["cut_id"])   # solapes (§10)
             editorial_trims.save_document(self.w.trims_path, document)
             self.w.trims = document
             self.w._review_stale = True
@@ -1042,7 +1216,7 @@ class LayersController:
             editorial_chunks.apply_plan(self.store.root, self.w._master_path(), plan, persist_selection=True)
             self.w.plan = plan
         else:
-            layer = copy.deepcopy(self.store.layers[lid])
+            layer = copy.deepcopy(self._store_layer(lid))
             if create:
                 layer["items"].append(item)
             elif delete:
@@ -1082,7 +1256,7 @@ class LayersController:
         doc = self._lane_doc(lid)
 
         def do():
-            if lid == "recortes":
+            if lid.startswith("trims:"):
                 document, twin = edits.split_cut(self.w.trims, item["item_id"], t)
                 editorial_trims.save_document(self.w.trims_path, document)
                 self.w.trims = document
@@ -1109,7 +1283,7 @@ class LayersController:
                 if mark.get("label"):
                     reg.editar(twin, label=mark["label"])
                 return twin["id"]
-            layer_doc, twin = edits.split_layer_item(self.store.layers[lid], item["item_id"], t,
+            layer_doc, twin = edits.split_layer_item(self._store_layer(lid), item["item_id"], t,
                                                      segment=segment)
             layers.validate_items(layer_doc["items"], self.store.master["media"]["duration"])
             self.store.save(layer_doc)
@@ -1239,6 +1413,8 @@ class LayersController:
             return True
         if action == "tools.select_all":
             return self.select_all()
+        if action == "layers.new_lane":
+            return self.new_lane_dialog()
         multi = len(self.selection) > 1
         if multi and action in ("edit.toggle", "edit.accept", "edit.delete"):
             try:
@@ -1405,8 +1581,10 @@ class LayersController:
                 item = item_hit[0]
                 hovered = (self.find(hit[0]["nombre"])[0], item)
                 x = max(5, min(e.x, canvas.winfo_width() - 260))
+                origin = {"silence": "silencio", "ai": "AI", "user": "tuyo"}.get(item.get("origin"))
                 text = canvas.create_text(x + 5, max(2, e.y - 55), text=(
-                    item['label'] + ' · ' + item['state'] + '\n' + item['comment'])[:400],
+                    item['label'] + ' · ' + item['state'] + (' · ' + origin if origin else '')
+                    + '\n' + item['comment'])[:400],
                     anchor="nw", width=250, fill="white", tags="layer-tooltip")
                 bbox = canvas.bbox(text)
                 if bbox:
@@ -1525,37 +1703,57 @@ class LayersController:
         color.insert(0, "#d09947")
         color.pack(fill="x", padx=15, pady=5)
         current = []
-        def refresh():
+        def refresh(select=None):
             current[:] = self.all()
             listing.delete(0, "end")
             for layer in current:
-                listing.insert("end", f"{layer['name']} · {len(layer['items'])} items · {layer['layer_id']}")
+                kind = {"recortes": "recortes", "topics": "temas", "ai": "AI", "user": "pedidos"}.get(layer["kind"], layer["kind"])
+                listing.insert("end", f"{layer['name']} · {kind} · {len(layer['items'])} items · {layer['layer_id']}")
+            if select in [l["layer_id"] for l in current]:
+                index = [l["layer_id"] for l in current].index(select)
+                listing.selection_set(index)
+                listing.see(index)
             self.w.editor.refrescar_layout()
+        def chosen():
+            if not listing.curselection():
+                raise ValueError("elige un carril de la lista")
+            return current[listing.curselection()[0]]
         def action(mode):
             try:
                 if self.w.worker and self.w.worker.is_alive():
                     raise ValueError("espera a que termine la operación del proyecto")
                 if mode == "new":
-                    layer = layers.new_layer(self.store.master, name.get().strip(), master_digest=self.store.source_digest)
-                else:
-                    if not listing.curselection():
-                        return
-                    layer = current[listing.curselection()[0]]
-                    if layer["kind"] not in ("user", "topics"):
-                        raise ValueError("capa del proyecto: sus items se editan en el timeline")
-                doc = "layer:" + layer["layer_id"]
+                    self.new_lane_dialog()
+                    return
+                layer = chosen()
+                lid = layer["layer_id"]
                 if mode == "delete":
-                    self.transact("borrar capa", [doc], lambda: self.store.delete(layer["layer_id"]))
-                    self.clear_selection()
+                    if lid.startswith("trims:"):
+                        answer = messagebox.askyesnocancel(
+                            "Borrar carril de recortes",
+                            f"¿Mover los {len(layer['items'])} cortes de «{layer['name']}» al carril "
+                            "«Recortes»? (No = borrarlos)", parent=win)
+                        if answer is None:
+                            return
+                        self.delete_lane(lid, move_to_main=bool(answer))
+                    else:
+                        self.delete_lane(lid)
+                elif mode in ("up", "down"):
+                    self.move_lane(lid, -1 if mode == "up" else 1)
+                    refresh(select=lid)
+                    return
                 else:
-                    layer.update(name=name.get().strip() or layer["name"], color=color.get().strip())
-                    self.transact("crear capa" if mode == "new" else "renombrar capa", [doc],
-                                  lambda: self.store.save(layer))
+                    self.rename_lane(lid, name.get(), color.get().strip() or None)
                 self.snapshot()
-                refresh()
+                refresh(select=lid)
             except Exception as error:
                 messagebox.showerror("Capas", str(error), parent=win)
-        for label, mode in (("Crear capa", "new"), ("Cambiar nombre / color", "save"), ("Borrar capa y sus items", "delete")):
+        row = ctk.CTkFrame(win, fg_color="transparent")
+        row.pack(pady=4)
+        for label, mode in (("▲ Subir", "up"), ("▼ Bajar", "down")):
+            ctk.CTkButton(row, text=label, width=90, command=lambda m=mode: action(m)).pack(side="left", padx=4)
+        for label, mode in (("Añadir capa… (Ctrl+N)", "new"), ("Cambiar nombre / color", "save"),
+                            ("Borrar carril / capa", "delete")):
             ctk.CTkButton(win, text=label, command=lambda m=mode: action(m)).pack(pady=4)
-        ctk.CTkLabel(win, text="Arrastra un rango en el carril; doble click edita el pedido para la AI.").pack()
+        ctk.CTkLabel(win, text="Corte (B): dibuja una caja en el carril. Doble click edita el pedido para la AI.").pack()
         refresh()

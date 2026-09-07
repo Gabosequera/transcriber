@@ -35,6 +35,12 @@ MIN_CUT_SECONDS = 0.05                 # una región más corta no es un recorte
 PROPOSAL_MIN_SECONDS = 0.2             # la AI no propone recortes de menos de esto
 PROPOSAL_SNAP_RADIUS = 1.5             # s — radio para no partir palabras/risas
 IDENTITY_KEYS = ("size", "hash_muestreado", "inventario_sha256")
+LANE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
+# Carriles de recortes de fábrica (§10): «main» = silencios de la heurística y cortes
+# tuyos; «ai» = cortes sugeridos por la AI, encima del anterior. Un archivo sin
+# `lanes` equivale a estos dos; un corte sin `lane` se deriva de su origen.
+DEFAULT_LANES = ({"lane_id": "main", "name": "Recortes", "color": "#728bd0"},
+                 {"lane_id": "ai", "name": "Cortes sugeridos (AI)", "color": "#9471bd"})
 
 DEFAULT_SILENCE = {
     "min_gap": 1.0,            # s — hueco mínimo sin voz para considerarlo
@@ -67,7 +73,7 @@ def new_document(fingerprint: dict, duration: float) -> dict:
     return {"schema": SCHEMA_TRIMS, "media": identity(fingerprint),
             "duration": round(finite_time(duration, name="duration"), 3),
             "revision": 0, "next_id": 1, "updated_at": _now(),
-            "silence": None, "ai": None, "cuts": []}
+            "silence": None, "ai": None, "lanes": [dict(l) for l in DEFAULT_LANES], "cuts": []}
 
 
 def _normalize_cut(cut: dict, duration: float, index: int) -> dict:
@@ -90,9 +96,12 @@ def _normalize_cut(cut: dict, duration: float, index: int) -> dict:
     if not isinstance(warnings, list):
         raise ValueError(f"{cut_id}: warnings debe ser una lista")
     evidence = cut.get("evidence") if isinstance(cut.get("evidence"), dict) else {}
+    lane = str(cut.get("lane") or ("ai" if origin == "ai" else "main"))
+    if not LANE_ID.fullmatch(lane):
+        raise ValueError(f"{cut_id}: carril inválido {lane!r}")
     return {
         **cut, "cut_id": cut_id, "t_ini": round(start, 3), "t_fin": round(min(end, duration), 3),
-        "origin": origin, "enabled": bool(cut.get("enabled", True)),
+        "origin": origin, "lane": lane, "enabled": bool(cut.get("enabled", True)),
         "accepted": bool(cut.get("accepted", False)),   # marca de revisión humana (§3.1)
         "edited": bool(cut.get("edited", False)),
         "reason": str(cut.get("reason") or ""), "confidence": confidence,
@@ -124,8 +133,85 @@ def validate_document(document: dict, *, fingerprint: dict | None = None,
     normalized.sort(key=lambda item: (item["t_ini"], item["t_fin"], item["cut_id"]))
     used = [int(item["cut_id"][4:]) for item in normalized]
     next_id = max(int(document.get("next_id") or 1), (max(used) + 1) if used else 1)
+    lanes_ = _normalize_lanes(document.get("lanes"), normalized)
     return {**document, "duration": round(length, 3), "revision": int(document.get("revision") or 0),
-            "next_id": next_id, "cuts": normalized}
+            "next_id": next_id, "lanes": lanes_, "cuts": normalized}
+
+
+def _normalize_lanes(lanes_, cuts) -> list[dict]:
+    """`lanes` ausente = los dos de fábrica. Los carriles que usan los cortes y no
+    están declarados se añaden (sin migración a mano); ids duplicados o inválidos
+    se rechazan."""
+    if lanes_ is None:
+        lanes_ = [dict(l) for l in DEFAULT_LANES]
+    if not isinstance(lanes_, list):
+        raise ValueError("lanes debe ser una lista")
+    result, seen = [], set()
+    for index, lane in enumerate(lanes_):
+        if not isinstance(lane, dict):
+            raise ValueError(f"carril {index + 1} no es un objeto")
+        lane_id = str(lane.get("lane_id") or "")
+        if not LANE_ID.fullmatch(lane_id):
+            raise ValueError(f"lane_id inválido: {lane_id!r}")
+        if lane_id in seen:
+            raise ValueError(f"lane_id duplicado: {lane_id}")
+        seen.add(lane_id)
+        color = str(lane.get("color") or "#728bd0")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise ValueError(f"{lane_id}: color inválido")
+        result.append({**lane, "lane_id": lane_id, "name": str(lane.get("name") or lane_id), "color": color})
+    defaults = {l["lane_id"]: l for l in DEFAULT_LANES}
+    for cut in cuts:
+        if cut["lane"] not in seen:
+            seen.add(cut["lane"])
+            result.append(dict(defaults.get(cut["lane"], {"lane_id": cut["lane"], "name": cut["lane"],
+                                                          "color": "#728bd0"})))
+    return result
+
+
+def lanes(document: dict | None) -> list[dict]:
+    """Carriles declarados del documento (o los de fábrica)."""
+    if not document:
+        return [dict(l) for l in DEFAULT_LANES]
+    return _normalize_lanes(document.get("lanes"), document.get("cuts") or [])
+
+
+def add_lane(document: dict, name: str, *, color: str = "#c58e43", lane_id: str | None = None) -> dict:
+    """Carril de recortes nuevo del usuario (§10): una entrada más en `lanes`."""
+    import uuid
+    current = lanes(document)
+    lane_id = lane_id or "lane-" + uuid.uuid4().hex[:8]
+    if not LANE_ID.fullmatch(lane_id) or any(l["lane_id"] == lane_id for l in current):
+        raise ValueError("lane_id inválido o repetido")
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ValueError("color inválido (#RRGGBB)")
+    lane = {"lane_id": lane_id, "name": (name or "").strip() or "Recortes", "color": color}
+    document["lanes"] = current + [lane]
+    return lane
+
+
+def remove_lane(document: dict, lane_id: str, *, move_to: str | None = "main") -> int:
+    """Quita un carril del usuario: sus cortes pasan a `move_to` (o se borran con
+    None). Los de fábrica no se quitan. Devuelve cuántos cortes se movieron o borraron."""
+    if lane_id in {l["lane_id"] for l in DEFAULT_LANES}:
+        raise ValueError("los carriles de fábrica no se borran")
+    current = lanes(document)
+    if not any(l["lane_id"] == lane_id for l in current):
+        raise ValueError("carril desconocido")
+    if move_to is not None and not any(l["lane_id"] == move_to for l in current):
+        raise ValueError("carril destino desconocido")
+    touched = 0
+    kept = []
+    for cut in document["cuts"]:
+        if cut_lane(cut) == lane_id:
+            touched += 1
+            if move_to is None:
+                continue
+            cut["lane"] = move_to
+        kept.append(cut)
+    document["cuts"] = kept
+    document["lanes"] = [l for l in current if l["lane_id"] != lane_id]
+    return touched
 
 
 def load_document(path: str | Path, *, fingerprint: dict | None = None,
@@ -162,13 +248,14 @@ def save_document(path: str | Path, document: dict) -> Path:
 def _new_cut(document: dict, t_ini: float, t_fin: float, *, origin: str, reason: str = "",
              confidence: float | None = None, enabled: bool = True, chunk_id: str | None = None,
              evidence: dict | None = None, warnings: list[str] | None = None,
-             edited: bool = False, accepted: bool = False) -> dict:
+             edited: bool = False, accepted: bool = False, lane: str | None = None) -> dict:
     duration = float(document["duration"])
     start, end = sorted((max(0.0, float(t_ini)), min(duration, float(t_fin))))
     if end - start < MIN_CUT_SECONDS:
         raise ValueError(f"un recorte debe durar al menos {MIN_CUT_SECONDS:.2f} s")
     cut = {"cut_id": f"cut-{int(document['next_id']):06d}", "t_ini": round(start, 3),
-           "t_fin": round(end, 3), "origin": origin, "enabled": bool(enabled),
+           "t_fin": round(end, 3), "origin": origin,
+           "lane": str(lane or ("ai" if origin == "ai" else "main")), "enabled": bool(enabled),
            "accepted": bool(accepted),
            "edited": bool(edited), "reason": reason or "", "confidence": confidence,
            "chunk_id": chunk_id, "evidence": evidence or {}, "warnings": list(warnings or []),
@@ -529,6 +616,7 @@ def apply_silence_analysis(document: dict, analysis: dict) -> dict:
     sort_cuts(document)
     used = [int(cut["cut_id"][4:]) for cut in document["cuts"]]
     document["next_id"] = max(int(document["next_id"]), (max(used) + 1) if used else 1)
+    coalesce(document, lane="main")            # solapes dentro del carril (§10)
     document["silence"] = {key: analysis[key] for key in
                            ("version", "params", "analyzed_at", "tracks_measured", "stats")}
     return document
@@ -638,6 +726,7 @@ def merge_proposal(document: dict, proposal: dict, *, proposal_digest: str) -> d
                              warnings=cut["warnings"]))
     document["cuts"] = kept
     sort_cuts(document)
+    coalesce(document, lane="ai")              # solapes dentro del carril (§10)
     document["ai"] = {"planner": proposal["planner"], "proposal_digest": proposal_digest,
                       "imported_at": _now(), "count": len(proposal["cuts"])}
     return document
@@ -792,6 +881,49 @@ def write_review_package(root: str | Path, master: dict, plan: dict | None,
     paths["request"] = atomic_write_text(root / "views" / "trim-agent-request.md",
                                          agent_request_markdown(master, blocks, document))
     return paths
+
+
+def editorial_request_markdown(master: dict, blocks: list, document: dict | None, topics_request: dict) -> str:
+    """views/editorial-agent-request.md: la Tarea 4 de la skill — primero temas (Tarea
+    3, dos pasadas) y después recortes de contenido (Tarea 2) usando el mapa de temas
+    como contexto, sin duplicar los recortes ya aceptados."""
+    summary = stats(document)
+    accepted = sum(1 for cut in ((document or {}).get("cuts") or []) if cut.get("accepted"))
+    lanes_text = " · ".join(f"«{lane['name']}» ({sum(1 for c in document['cuts'] if cut_lane(c) == lane['lane_id'])})"
+                            for lane in lanes(document)) if document else "sin recortes"
+    listing = "\n".join(f"- {block['folder']}/trim-review.md — {block['title']}" for block in blocks)
+    return f"""# Revisión editorial — Transcriptor (Tarea 4 de la skill)
+
+Usa la skill `transcriptor` (`skills/transcriptor/SKILL.md`), sección «Tarea 4». Es UN
+pedido con dos partes, en este orden:
+
+1. **Tarea 3, temas y subtemas en dos pasadas.** `views/topics-agent-request.md` y
+   `views/topics-request.json` (request_id `{topics_request['request_id']}`). Espera a que la
+   app valide la primera pasada antes de la segunda.
+2. **Tarea 2, recortes de contenido.** `views/trim-agent-request.md` y los
+   `trim-review.md` de cada bloque. Usa el mapa de temas que acabas de producir como
+   contexto. Cada `⟂ RECORTE` marcado «aceptado por el editor» ya está decidido: no
+   lo dupliques ni propongas otro que lo contenga.
+
+Estado de los recortes: {summary['total']} en total, {summary['enabled']} activos, {accepted} aceptados
+por el editor, {format_time(summary['removed_seconds'])} a quitar. Carriles: {lanes_text}.
+source_master_digest: {editorial_chunks.source_master_digest(master)}
+
+Bloques:
+{listing}
+
+Si necesitas capas auxiliares (momentos, preguntas abiertas, lo que decidas), responde
+con `schema: editorial-layers-proposal/1` y `layers: [...]` (cada una `kind: "ai"`);
+la app las funde respetando lo editado y borrado por el humano. Escribe cada JSON a un
+temporal y renómbralo al terminar. No toques `trims.json`, `layers/` ni el master.
+"""
+
+
+def write_editorial_request(root: str | Path, master: dict, plan: dict | None, document: dict | None,
+                            topics_request: dict) -> Path:
+    return atomic_write_text(Path(root) / "views" / "editorial-agent-request.md",
+                             editorial_request_markdown(master, review_blocks(master, plan), document,
+                                                        topics_request))
 
 
 def whole_plan(master: dict) -> dict:

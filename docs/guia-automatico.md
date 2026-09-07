@@ -285,7 +285,34 @@ con tus correcciones, pulsa otra vez Analizar temas. Las respuestas antiguas se 
 
 `trims.json` (lo mantiene la app; no se edita a mano) usa `schema: "editorial-trims/1"`.
 Cada recorte lleva `cut_id`, `t_ini`, `t_fin`, `origin` (`silence`, `ai`, `user`),
-`enabled`, `edited`, `reason`, `confidence`, `chunk_id`, `evidence` y `warnings`.
+`lane` (carril), `enabled`, `accepted`, `edited`, `reason`, `confidence`, `chunk_id`,
+`evidence` y `warnings`; el documento declara sus carriles en `lanes`. Los archivos
+anteriores cargan igual: un corte sin `lane` va al carril de su origen.
+
+## Carriles de recortes, temas y capas de la AI
+
+Los recortes se ven en **carriles** del timeline que son vistas del mismo `trims.json`:
+**Recortes** (silencios de la heurística y cortes tuyos) y, encima, **Cortes sugeridos
+(AI)** (violeta). Puedes añadir más carriles de recortes tuyos; lo que se exporta sigue
+siendo la unión de todos los activos, estén en el carril que estén. Los temas de la AI
+se muestran como **Temas** y **Subtemas** (carriles por nivel de la misma capa).
+
+- **Añadir capa** (`Ctrl` + `N` o «Capas y comentarios») pregunta el tipo: *Recortes*
+  (dibujar una caja crea un corte que cuenta para la exportación, sin diálogo) o
+  *Pedidos para la AI* (cada caja abre el pedido con el cursor ya en el texto). La capa
+  nueva se coloca encima del carril seleccionado (sin selección, arriba de los recortes).
+- **Capas y comentarios** también renombra, recolorea, sube o baja (▲ ▼) y borra
+  carriles. Al borrar un carril de recortes tuyo la app pregunta si mover sus cortes a
+  «Recortes» o borrarlos. Una capa de la AI borrada no vuelve a aparecer aunque la AI la
+  proponga otra vez. El orden vive en `views/lanes.json` y se reconstruye solo.
+- **Preparar revisión editorial** escribe en un solo pedido la solicitud de temas (dos
+  pasadas), el paquete de revisión de recortes y `views/editorial-agent-request.md`
+  (Tarea 4 de la skill): la AI hace primero los temas y después los recortes de
+  contenido usando ese mapa, sin volver a proponer sobre lo que ya aceptaste con `A`.
+  Puede responder con varias capas a la vez (`layers: [...]`, `kind: "ai"`) y la app las
+  importa solas al aparecer, respetando lo que editaste o borraste.
+- La barra de detalle y el tooltip muestran el origen (silencio, AI, tuyo) junto al
+  estado; un recorte aceptado lleva borde verde.
 
 Se rechazan planes de otra metadata, tiempos no finitos, huecos o solapes entre bloques,
 bloques de más de 3000 s, IDs de intervención inexistentes y recortes fuera de rango. La AI
