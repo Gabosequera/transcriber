@@ -414,6 +414,11 @@ def export_montage(master_path, montage, source, output_dir, *, fmt=DEFAULT_FORM
             final_media=destination / filename, layers=layers, lane_order=lane_order,
             chronological=False)
         atomic_write_json(stage / "accepted-montage.json", document)
+        # Fase F: EDL y FCPXML que referencian el video FUENTE (los clips llegan sueltos a Resolve)
+        fps = (info.get("video") or {}).get("fps") or 25.0
+        from editorial_io import atomic_write_text
+        atomic_write_text(stage / "montaje.edl", editorial_montaje.to_cmx3600(document, fps, reel=source.stem[:8]))
+        atomic_write_text(stage / "montaje.fcpxml", editorial_montaje.to_fcpxml(document, source, fps))
         atomic_write_json(stage / "exports.json", {
             "schema": "editorial-montage-export/1", "format": fmt,
             "files": [{"file": filename, "kept_seconds": round(expected, 3),

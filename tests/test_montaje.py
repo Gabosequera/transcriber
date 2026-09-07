@@ -280,6 +280,8 @@ class MontageExportTests(unittest.TestCase):
             self.assertEqual(words, [("retorno", 0.0), ("inicio", 2.0), ("eliminado", 4.0)])
             frozen = editorial_io.read_json(dest / "accepted-montage.json")
             self.assertEqual(len(frozen["clips"]), 3)
+            self.assertIn("TITLE: MONTAJE", (dest / "montaje.edl").read_text(encoding="utf-8"))
+            self.assertIn("<fcpxml", (dest / "montaje.fcpxml").read_text(encoding="utf-8"))
             with self.assertRaises(FileExistsError):
                 podcast_export.export_montage(master_path, doc, source, root / "out")
             empty = montaje.new_document(master["media"]["fingerprint"], 12)
@@ -428,3 +430,23 @@ class TaskFiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "keep apunta"):
             montaje.validate_proposal(self.proposal(latest, [{"clip_id": "k", "keep": "clip-000099"}]),
                                       self.master, latest, self.snapshot, doc2)
+
+
+class ResolveExportTests(unittest.TestCase):
+    """Fase F: EDL CMX3600 y FCPXML del montaje (golden mínimos)."""
+
+    def test_edl_and_fcpxml_reference_the_source_in_sequence_order(self):
+        doc = doc_with((8, 10), (1, 3))
+        edl = montaje.to_cmx3600(doc, 25, reel="hijo", title="PRUEBA")
+        self.assertEqual(edl.splitlines()[0], "TITLE: PRUEBA")
+        self.assertIn("001  hijo     V     C        00:00:08:00 00:00:10:00 00:00:00:00 00:00:02:00", edl)
+        self.assertIn("002  hijo     AA    C        00:00:01:00 00:00:03:00 00:00:02:00 00:00:04:00", edl)
+        self.assertIn("* FROM CLIP NAME: clip-000002", edl)
+        fcp = montaje.to_fcpxml(doc, Path("C:/videos/hijo.mp4"), 25)
+        self.assertIn('frameDuration="1/25s"', fcp)
+        self.assertIn('name="hijo.mp4"', fcp)
+        self.assertIn('<asset-clip ref="r2" name="clip-000001" offset="0/25s" start="200/25s" duration="50/25s"/>', fcp)
+        self.assertIn('<asset-clip ref="r2" name="clip-000002" offset="50/25s" start="25/25s" duration="50/25s"/>', fcp)
+        import xml.dom.minidom
+        xml.dom.minidom.parseString(fcp.encode("utf-8"))                 # XML bien formado
+        self.assertEqual(montaje._timecode(3661.5, 30), "01:01:01:15")

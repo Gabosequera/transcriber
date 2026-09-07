@@ -773,3 +773,15 @@ pasada. La sección «Tarea 5 — Montaje por temas» de la skill pide explícit
 conservar el humor tal como es (la AI no censura; Resolve es la última pasada humana).
 Tres tests del ciclo (pedido y transcript, validación con tolerancia/repetidos/orden,
 bucle de dos pasadas con protección y `keep`) y el bloque del smoke; 149 tests.
+
+## 2026-09-07 — Del montaje a Resolve: EDL y FCPXML (0.4.0, Fase F)
+
+«Exportar montaje» deja junto al video `montaje.edl` (CMX3600) y `montaje.fcpxml`
+que referencian el video fuente: en Resolve los clips llegan sueltos y editables, en
+el orden del montaje. Sin opción nueva en «Salida»: se escriben siempre (coste cero).
+Comprobación de solo lectura sobre el proyecto real de Gabriel (`projects/001`, que
+resulta ser ya un hijo recortado con 30 temas y 100 recortes): el estado del ciclo,
+el transcript con temas intercalados, las señales y la derivación de capas al hijo
+salen en milisegundos. 150 tests. Queda para Gabriel: reinstalar (hecho en esta
+sesión con la app cerrada), pedir a la AI la Tarea 4 y la Tarea 5 sobre el hijo, y
+exportar el montaje real.

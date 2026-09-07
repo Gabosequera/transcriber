@@ -333,6 +333,12 @@ todas las pistas de audio, y publica su proyecto hijo con `derivation.segments` 
 orden (para seguir con la AI sobre el resultado). Todo vive en `views/montaje.json`
 (`editorial-montaje/1`), atado a la huella del medio.
 
+**Para Resolve sin perder los cortes.** Junto al video, «Exportar montaje» deja
+`montaje.edl` (CMX3600) y `montaje.fcpxml`, que referencian el **video fuente** (el
+recortado), no el montaje renderizado: al importarlos en DaVinci Resolve los clips llegan
+sueltos y editables, en el mismo orden y con los mismos puntos de entrada y salida. Usa
+el video renderizado para revisar y el EDL/FCPXML para seguir editando.
+
 ## 8. Montaje por temas con la AI (Tarea 5)
 
 Sobre el video recortado con su capa de temas, **Preparar para la AI ▾ → Montaje por

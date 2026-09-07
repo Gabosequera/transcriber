@@ -1081,3 +1081,59 @@ def import_proposal(root, master, snapshot, document, proposal, *, topics_layer=
                + (" · " + "; ".join(validated["warnings"]) if validated["warnings"] else "")
                + ". Revísalo en modo Montaje.")
     return merged, validated, message
+
+
+# ==================================================== Fase F: del montaje a Resolve --
+# EDL CMX3600 y FCPXML que referencian el VIDEO FUENTE (el hijo recortado), no el
+# montaje renderizado: en Resolve los clips llegan sueltos y editables. Puros.
+def _timecode(seconds: float, fps: float) -> str:
+    fps_int = int(round(fps))
+    frames = int(round(float(seconds) * fps_int))
+    h, rest = divmod(frames, 3600 * fps_int)
+    m, rest = divmod(rest, 60 * fps_int)
+    s, f = divmod(rest, fps_int)
+    return f"{h:02d}:{m:02d}:{s:02d}:{f:02d}"
+
+
+def to_cmx3600(document: dict, fps: float, reel: str = "AX", *, title: str = "MONTAJE") -> str:
+    """EDL CMX3600 (un evento por tramo aplanado, V + A, corte seco)."""
+    lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
+    for index, piece in enumerate(flatten(document), 1):
+        src_in, src_out = _timecode(piece["source_ini"], fps), _timecode(piece["source_fin"], fps)
+        rec_in, rec_out = _timecode(piece["seq_ini"], fps), _timecode(piece["seq_fin"], fps)
+        reel_name = (reel or "AX")[:8].ljust(8)
+        lines.append(f"{index:03d}  {reel_name} V     C        {src_in} {src_out} {rec_in} {rec_out}")
+        lines.append(f"{index:03d}  {reel_name} AA    C        {src_in} {src_out} {rec_in} {rec_out}")
+        lines.append(f"* FROM CLIP NAME: {piece['clip_id']}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def to_fcpxml(document: dict, media_path, fps: float, *, name: str = "Montaje") -> str:
+    """FCPXML 1.9 mínimo: un asset (el video fuente) y una secuencia con un asset-clip
+    por tramo aplanado, en orden. Resolve lo importa como timeline editable."""
+    from xml.sax.saxutils import escape
+    fps_int = int(round(fps))
+    frame = f"1/{fps_int}s"
+    duration_src = float(document["duration_source"])
+
+    def t(seconds: float) -> str:
+        return f"{int(round(float(seconds) * fps_int))}/{fps_int}s"
+    path = Path(media_path).resolve().as_uri()
+    pieces = flatten(document)
+    total = sum(p["source_fin"] - p["source_ini"] for p in pieces)
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', "<!DOCTYPE fcpxml>", '<fcpxml version="1.9">',
+             "  <resources>",
+             f'    <format id="r1" name="FFVideoFormatRateUndefined" frameDuration="{frame}"/>',
+             f'    <asset id="r2" name="{escape(Path(media_path).name)}" start="0s" duration="{t(duration_src)}" '
+             f'hasVideo="1" hasAudio="1" format="r1">',
+             f'      <media-rep kind="original-media" src="{escape(path)}"/>',
+             "    </asset>", "  </resources>", "  <library>", '    <event name="Transcriptor">',
+             f'      <project name="{escape(name)}">',
+             f'        <sequence format="r1" duration="{t(total)}" tcStart="0s">', "          <spine>"]
+    for piece in pieces:
+        lines.append(f'            <asset-clip ref="r2" name="{escape(piece["clip_id"])}" offset="{t(piece["seq_ini"])}" '
+                     f'start="{t(piece["source_ini"])}" duration="{t(piece["source_fin"] - piece["source_ini"])}"/>')
+    lines += ["          </spine>", "        </sequence>", "      </project>", "    </event>", "  </library>",
+              "</fcpxml>"]
+    return "\n".join(lines) + "\n"

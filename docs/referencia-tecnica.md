@@ -673,6 +673,20 @@ intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
   estados. `SKILL.md`: Tarea 5 completa (§8.3 del plan). Tests `TaskFiveTests` (3) y
   bloque del smoke (pedido → propuesta con `keep` + clip nuevo → import protegido →
   Ctrl+Z/R).
+- **Fase F (hecha, 0.4.0)** — `editorial_montaje.to_cmx3600(doc, fps, reel)` (un
+  evento V + AA por tramo aplanado, timecodes NDF por fps redondeado) y
+  `to_fcpxml(doc, media_path, fps)` (FCPXML 1.9: un `asset` = el video fuente, una
+  `sequence` con un `asset-clip` por tramo). `export_montage` los escribe siempre
+  junto al video (`montaje.edl`, `montaje.fcpxml`) referenciando el video FUENTE, no
+  el renderizado; sin opción en «Salida» (coste cero, decisión por defecto). Test con
+  golden mínimo y XML parseado.
+- **Probado con el proyecto real (solo lectura, 2026-09-07):** `projects/001/editorial`
+  es un HIJO (42:34, dos pistas, 30 temas en una capa, 100 recortes, 3 de la AI);
+  `editorial_cycle.status` en 15 ms dice «Recortes de la AI importados: 3»;
+  `montage_transcript` genera 7.807 líneas con 34 encabezados ▶ y `signals_markdown`
+  2.697 líneas en 0,01 s; `derive_layers` con 96 segmentos conserva los 30 temas.
+  Falta el ciclo completo con la AI y la exportación real del montaje en la app
+  instalada (Gabriel).
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
