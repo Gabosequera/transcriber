@@ -638,3 +638,9 @@ verde y ✓. **D** también borra. Arreglado el subrayado blanco de la selecció
 seleccionar (click o marquesina) se redibujaba el preview y no el timeline; y un click
 sin arrastre sobre un conjunto deja solo ese item. Tooltips y menú muestran los
 atajos en forma legible («Supr», «→», «.», «Espacio»). 122 tests, smoke completo.
+
+Rango a repetir («limitador») en la regla, pedido de Gabriel: con el botón derecho
+arriba, arrastrar define el rango, click fija la entrada, Ctrl+click la salida (ambos
+sobrescriben) y Shift (click o arrastre) lo quita; los dos puntos se arrastran con el
+botón izquierdo y el cursor avisa; la reproducción vuelve a la entrada al llegar a la
+salida (re-sesión). Acciones `loop.*` en el menú, sin tecla por defecto.

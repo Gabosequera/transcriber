@@ -96,6 +96,9 @@ class EditorMedios:
         self.rate = 1.0                        # velocidad de reproducción (SPEEDS)
         self._rate_after = None                # debounce del cambio de velocidad
         self._seguir = True                    # auto-scroll durante la reproducción (F)
+        self.loop = None                       # (entrada, salida) del rango a repetir, o None
+        self._drag_loop = None                 # gesto vivo sobre la regla (botón derecho o handle)
+        self._loop_cursor = None
         self._envs: dict[int, list] = {}       # envolventes GLOBALES por pista (fit)
         self._ancla = (0.0, 0.0)               # (t, reloj) del último play
         self._ph = None                        # item del playhead en el canvas del timeline
@@ -224,7 +227,12 @@ class EditorMedios:
         self.tl.bind("<Button-5>", self._tl_rueda)              # Linux ↓
         # resize con DEBOUNCE (no redibujar por cada pixel del drag — consenso q.6)
         self.tl.bind("<Configure>", self._tl_resize)
-        self.tl.bind("<Button-3>", self._menu_contextual, add=True)   # menú con todas las acciones
+        # botón derecho: en la REGLA define el rango a repetir (arrastrar; click = entrada;
+        # Ctrl+click = salida; Shift = quitar); en el resto, el menú con todas las acciones
+        self.tl.bind("<Button-3>", self._tl_press3, add=True)
+        self.tl.bind("<B3-Motion>", self._tl_motion3, add=True)
+        self.tl.bind("<ButtonRelease-3>", self._tl_release3, add=True)
+        self.tl.bind("<Motion>", self._tl_hover_loop, add=True)
         # ---- teclado: keymap configurable (diseño §2) ----
         # Un solo <Key> en el TOPLEVEL (add=True, nunca bind_all) con GUARDA DE FOCO:
         # solo despacha si el foco está en un Canvas/Frame/Label o el propio toplevel;
@@ -506,6 +514,132 @@ class EditorMedios:
         import toolbar_ui
         before = (lambda menu: self.menu_extra(e, menu)) if (self.menu_extra is not None and e is not None) else None
         return toolbar_ui.build_menu(self.tl, self._acciones_disponibles(), self.ejecutar, before=before)
+
+    # ---- rango a repetir («limitador» en la regla; pedido de Gabriel 2026-09-07) ----
+    def _loop_handle_en(self, x, g):
+        """«in»/«out» si x está a ≤ 6 px del punto correspondiente del rango, o None."""
+        if self.loop is None:
+            return None
+        a, b = self.loop
+        xa, xb = self._t2x(a, g), self._t2x(b, g)
+        if abs(x - xa) <= 6:
+            return "in"
+        if abs(x - xb) <= 6:
+            return "out"
+        return None
+
+    def _set_loop(self, a, b, *, quiet=False):
+        """Fija el rango a repetir [a, b] (acotado al medio, al menos 50 ms)."""
+        if not self.info:
+            return
+        dur = self.info["duracion"]
+        a, b = sorted((min(max(float(a), 0.0), dur), min(max(float(b), 0.0), dur)))
+        if b - a < 0.05:
+            return
+        self.loop = (round(a, 3), round(b, 3))
+        self._dibujar_timeline()
+        if not quiet:
+            self._status_loop()
+
+    def _clear_loop(self):
+        if self.loop is None:
+            return
+        self.loop = None
+        self._dibujar_timeline()
+        self.status("Repetir: rango quitado")
+
+    def _status_loop(self):
+        if self.loop is not None:
+            a, b = self.loop
+            self.status(f"Repetir {self._fmt(a)} – {self._fmt(b)} ({b - a:.1f} s): al llegar a la "
+                        "salida vuelve a la entrada · click derecho en la regla: entrada · "
+                        "Ctrl: salida · Shift: quitar")
+
+    @staticmethod
+    def _fmt(t):
+        return f"{int(t // 60)}:{t % 60:04.1f}"
+
+    def _loop_set_in(self, t=None):
+        t = self.t_play if t is None else t
+        b = self.loop[1] if self.loop and self.loop[1] > t + 0.05 else self.info["duracion"]
+        self._set_loop(t, b)
+
+    def _loop_set_out(self, t=None):
+        t = self.t_play if t is None else t
+        a = self.loop[0] if self.loop and self.loop[0] < t - 0.05 else 0.0
+        self._set_loop(a, t)
+
+    def _tl_hover_loop(self, e):
+        """Cursor de doble flecha sobre un punto del rango (solo en la regla y solo
+        cuando cambia el estado)."""
+        g = self._tl_geo()
+        state = None
+        if g and e.y < RULER_H and self.loop is not None and self._drag_loop is None:
+            state = self._loop_handle_en(e.x, g)
+        if state != self._loop_cursor:
+            self._loop_cursor = state
+            if state or e.y < RULER_H:
+                try:
+                    self.tl.configure(cursor="sb_h_double_arrow" if state else "arrow")
+                except Exception:
+                    pass
+
+    def _tl_press3(self, e):
+        g = self._tl_geo()
+        if self.info and g and e.y < RULER_H:
+            t = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+            self._drag_loop = dict(kind="right", t0=t, t1=t, x0=e.x, x1=e.x,
+                                   state=int(getattr(e, "state", 0) or 0))
+            return "break"
+        return self._menu_contextual(e)
+
+    def _tl_motion3(self, e):
+        d = self._drag_loop
+        g = self._tl_geo()
+        if not g or d is None or d.get("kind") != "right":
+            return None
+        d["t1"] = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+        d["x1"] = e.x
+        self.tl.delete("loop-drag")
+        shift = bool(d["state"] & 0x1)
+        self.tl.create_rectangle(self._t2x(min(d["t0"], d["t1"]), g), 1,
+                                 self._t2x(max(d["t0"], d["t1"]), g), RULER_H - 1,
+                                 outline="#ff6b6b" if shift else "#7fb3ff", dash=(3, 2),
+                                 fill="" if shift else "#2c4a6e", tags="loop-drag")
+        return "break"
+
+    def _tl_release3(self, e):
+        d, self._drag_loop = self._drag_loop, None
+        if d is None or d.get("kind") != "right":
+            return None
+        self.tl.delete("loop-drag")
+        shift, ctrl = bool(d["state"] & 0x1), bool(d["state"] & 0x4)
+        moved = abs(d["x1"] - d["x0"]) >= 4
+        if shift:                              # Shift: quitar (click o arrastre)
+            self._clear_loop()
+        elif moved:                            # arrastre: el rango es la selección
+            self._set_loop(d["t0"], d["t1"])
+        elif ctrl:                             # Ctrl+click: salida (sobrescribe)
+            self._loop_set_out(d["t0"])
+        else:                                  # click: entrada (sobrescribe)
+            self._loop_set_in(d["t0"])
+        return "break"
+
+    def _dibujar_loop(self, g, alto):
+        if self.loop is None:
+            return
+        tl = self.tl
+        t0, span = self.view
+        a, b = self.loop
+        if b < t0 or a > t0 + span:
+            return
+        xa, xb = self._t2x(max(a, t0), g), self._t2x(min(b, t0 + span), g)
+        tl.create_rectangle(xa, 1, xb, RULER_H - 1, fill="#2c4a6e", outline="", stipple="gray50")
+        for x, t in ((xa, a), (xb, b)):
+            if t0 <= t <= t0 + span:
+                tl.create_line(x, RULER_H, x, alto, fill="#7fb3ff", dash=(2, 4))
+                tl.create_polygon(x - 5, 1, x + 5, 1, x, 9, fill="#7fb3ff", outline="#dbe9ff")
+                tl.create_rectangle(x - 1, 1, x + 1, RULER_H - 1, fill="#7fb3ff", outline="")
 
     def _menu_contextual(self, e=None):
         """Click derecho en el timeline o el preview (y el botón ⋮): el mismo
@@ -901,6 +1035,11 @@ class EditorMedios:
             return
         self.tl.focus_set()                    # habilita el teclado del editor
         self._drag_marca = None
+        if e.y < RULER_H and self.loop is not None:
+            edge = self._loop_handle_en(e.x, g)
+            if edge:                           # arrastrar un punto del rango a repetir
+                self._drag_loop = dict(kind="handle", edge=edge)
+                return
         if self._marks_height and RULER_H <= e.y <= RULER_H + self._marks_height and self.reg is not None:
             t = self._x2t(e.x, g)
             hit = self._marca_hit(e.x, e.y, g)
@@ -945,6 +1084,12 @@ class EditorMedios:
         g = self._tl_geo()
         if not g:
             return
+        d = self._drag_loop
+        if d is not None and d.get("kind") == "handle":
+            t = min(max(self._x2t(e.x, g), 0.0), self.info["duracion"])
+            a, b = self.loop
+            self._set_loop(*((t, b) if d["edge"] == "in" else (a, t)), quiet=True)
+            return
         if self._drag_extra is not None:
             gesto, y0 = self._drag_extra
             try:
@@ -977,6 +1122,10 @@ class EditorMedios:
         self._dibujar_timeline()
 
     def _tl_release(self, _e):
+        if self._drag_loop is not None and self._drag_loop.get("kind") == "handle":
+            self._drag_loop = None
+            self._status_loop()
+            return
         extra, self._drag_extra = self._drag_extra, None
         if extra is not None:
             gesto, y0 = extra
@@ -1227,6 +1376,9 @@ class EditorMedios:
             "view.zoom_sel": self._zoom_seleccion,
             "view.follow": self._toggle_seguir,
             "view.center": self._centrar,
+            "loop.set_in": self._loop_set_in,
+            "loop.set_out": self._loop_set_out,
+            "loop.clear": self._clear_loop,
             "transport.play_from_item": self._play_desde_seleccion,
             "marks.point": self._marca_punto,
             "marks.in": self._marca_in,
@@ -1341,6 +1493,7 @@ class EditorMedios:
             tl.create_line(x, RULER_H, x, alto, fill="#e8b34b", dash=(5, 3))
             tl.create_text(x + 3, RULER_H + 2, text="IN", anchor="nw",
                            fill="#e8b34b", font=("TkDefaultFont", 8, "bold"))
+        self._dibujar_loop(g, alto)
         self._ph = tl.create_line(0, 0, 0, 0, fill="#ff5252", width=2)
         self._mover_linea_playhead()
 
@@ -1796,6 +1949,9 @@ class EditorMedios:
                     log.write(json.dumps(self._play_metrics)+'\n')
             except OSError:
                 pass
+        if self.loop is not None and self.loop[0] <= self.t_play and self.t_play >= self.loop[1]:
+            self._play(reiniciar=True, desde=self.loop[0])     # repetir: otra sesión desde la entrada
+            return
         if self.info and self.t_play >= self.info["duracion"]:
             self.repro.stop()
         self.lbl_t.configure(text=self._texto_reloj())

@@ -395,6 +395,7 @@ reconocen igual.
 | `C` | Centrar el playhead |
 | `F` | Seguir al playhead durante la reproducción (sí/no) |
 | `Shift` + `T` | Saltar recortes al reproducir (el checkbox de RECORTES) |
+| Botón derecho en la regla (arriba) | Rango a repetir: arrastrar lo define; click = entrada; `Ctrl` + click = salida (sobrescriben la que había); `Shift` + click o `Shift` + arrastre lo quita. Los dos puntos se arrastran con el mouse; al llegar a la salida la reproducción vuelve a la entrada (reinicia la sesión, ≈1 s en un VOD HEVC). También en el menú ⋮: «Repetir: entrada / salida / quitar», sin tecla asignada por defecto |
 | Rueda, arrastre con botón central | Desplazarse |
 | `Shift` + `Z` | Ver todo |
 | `M`, `I`/`O`, `X`, `Supr` en el carril de marcas | Marcas del autor (ver la guía del modo Manual) |

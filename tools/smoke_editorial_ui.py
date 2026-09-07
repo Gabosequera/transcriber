@@ -661,6 +661,46 @@ def main():
         elabels = [empty.entrycget(i, "label") for i in range(empty.index("end") + 1) if empty.type(i) != "separator"]
         assert "Añadir capa encima…" in elabels and "Editar comentario y rangos" not in elabels, elabels
         empty.destroy()
+        # ---- rango a repetir en la regla (botón derecho) ----
+        ruler_y = 8
+        def right(phase, x, state=0):
+            e_ = NS(x=x, y=ruler_y, state=state, x_root=0, y_root=0)
+            return {"press": ed._tl_press3, "motion": ed._tl_motion3, "release": ed._tl_release3}[phase](e_)
+        assert ed.loop is None
+        assert right("press", x_of(2.0)) == "break"; right("motion", x_of(2.2)); right("motion", x_of(4.0)); right("release", x_of(4.0))
+        assert ed.loop == (2.0, 4.0), ed.loop                                   # arrastrar = el rango
+        right("press", x_of(3.0)); right("release", x_of(3.0))
+        assert ed.loop == (3.0, 4.0), ed.loop                                   # click = entrada (sobrescribe)
+        right("press", x_of(5.0), keymap.STATE_CONTROL); right("release", x_of(5.0), keymap.STATE_CONTROL)
+        assert ed.loop == (3.0, 5.0), ed.loop                                   # Ctrl+click = salida
+        # handles: cursor de doble flecha y arrastre con el botón izquierdo
+        ed._tl_hover_loop(NS(x=x_of(3.0) + 3, y=ruler_y, state=0))
+        assert ed.tl.cget("cursor") == "sb_h_double_arrow"
+        ed._tl_press(NS(x=x_of(3.0) + 2, y=ruler_y, state=0)); ed._tl_motion(NS(x=x_of(2.5), y=ruler_y, state=0)); ed._tl_release(NS(x=x_of(2.5), y=ruler_y, state=0))
+        assert abs(ed.loop[0] - 2.5) < .02 and ed.loop[1] == 5.0, ed.loop
+        ed._tl_hover_loop(NS(x=x_of(4.0), y=ruler_y, state=0)); assert ed.tl.cget("cursor") == "arrow"
+        assert ed.tl.find_withtag("all") and any(ed.tl.type(i) == "polygon" for i in ed.tl.find_all())
+        # el click derecho fuera de la regla sigue abriendo el menú (no toca el rango)
+        with mock.patch.object(ed, "_menu_contextual", return_value="break") as cm:
+            assert ed._tl_press3(NS(x=x_of(1.0), y=lane_y("trims:main"), state=0, x_root=0, y_root=0)) == "break" and cm.called
+        assert abs(ed.loop[0] - 2.5) < .02
+        # reproducir dentro del rango: al llegar a la salida vuelve a la entrada
+        ed._set_loop(1.0, 2.5); ed._set_playhead(2.0)
+        ed._play()
+        spin(lambda: ed.repro.position() is not None and ed.t_play > 2.2, timeout=25)
+        session = ed._vses
+        spin(lambda: ed._vses is not session and ed._vses is not None and ed.repro.position() is not None
+             and 1.0 <= ed.t_play < 2.0, timeout=25)
+        ed._stop_preview()
+        # Shift+click derecho (o Shift+arrastre) quita el rango; también desde el menú de acciones
+        right("press", x_of(1.5), keymap.STATE_SHIFT); right("release", x_of(1.5), keymap.STATE_SHIFT)
+        assert ed.loop is None
+        right("press", x_of(1.0)); right("motion", x_of(3.0)); right("release", x_of(3.0)); assert ed.loop == (1.0, 3.0)
+        right("press", x_of(1.2), keymap.STATE_SHIFT); right("motion", x_of(2.8), keymap.STATE_SHIFT); right("release", x_of(2.8), keymap.STATE_SHIFT)
+        assert ed.loop is None
+        ed._set_playhead(3.5); assert ed.ejecutar("loop.set_in") and ed.loop[0] == 3.5
+        ed._set_playhead(6.0); assert ed.ejecutar("loop.set_out") and ed.loop == (3.5, 6.0)
+        assert ed.ejecutar("loop.clear") and ed.loop is None
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

@@ -204,6 +204,15 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   entradas; `SUPPORTED_ACTIONS`). `editor.menu_contextual = False` lo apaga (Marcar
   conserva `_meta_menu`). Todo botón y entrada llama a `editor.ejecutar(id)`: el mismo
   despacho que la tecla, así que el historial y las guardas son idénticos.
+- **Rango a repetir** (2026-09-07): `EditorMedios.loop = (a, b)` (estado de sesión, no
+  se persiste). Botón derecho en la REGLA (`y < RULER_H`): `_tl_press3/_tl_motion3/
+  _tl_release3` (arrastrar = rango; click = entrada; Ctrl = salida; Shift = quitar);
+  fuera de la regla el botón derecho sigue abriendo el menú. Handles arrastrables con el
+  botón izquierdo (`_loop_handle_en`, ±6 px; cursor solo al cambiar de estado en
+  `_tl_hover_loop`). `_dibujar_loop` pinta la banda en la regla, triángulos y líneas
+  punteadas. En `_anim_tick`, al alcanzar la salida dentro del rango se re-arma la
+  sesión desde la entrada (`_play(reiniciar=True, desde=a)`: mismo coste que un seek).
+  Acciones `loop.set_in/set_out/clear` sin tecla por defecto (menú y Ajustes).
 - **Estados explícitos** (2026-09-07, decisión de Gabriel): E = aceptado, X = desactivado,
   P = propuesto (`editorial_edits.STATE_ACTIONS`/`state_for`); ninguna alterna y sobre
   varios items todos reciben el mismo estado. Dibujo: propuesto con `stipple="gray50"`,
