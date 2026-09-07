@@ -175,7 +175,7 @@ vale para capas propias, recortes, bloques y marcas del autor con sus validacion
 | Borrar | Supr | como hoy |
 | Editar | Enter F2 | como hoy |
 | Deseleccionar | Esc | como hoy |
-| Deshacer / rehacer | Ctrl+Z Ctrl+Shift+Z | ver §4 |
+| Deshacer / rehacer | Ctrl+Z · Ctrl+R (también Ctrl+Shift+Z, Ctrl+Y) | Cualquier cambio escrito desde el timeline: items, pedidos, marcadores, orden de carriles, capas. Ver §4 |
 
 Herramientas y selección múltiple (detalle en §7 y §8):
 
@@ -217,23 +217,49 @@ Vista:
 | Centrar playhead | C | |
 | Saltar recortes al reproducir | Shift+T | El checkbox de RECORTES |
 
-### 4. Deshacer / rehacer
+### 4. Deshacer / rehacer (Ctrl+Z · Ctrl+R)
 
-`HistoryStack` (nuevo `editorial_history.py`, puro) con profundidad 50, por medio
-cargado (se vacía al cambiar de video). `LayersController.persist()` es el único
-punto de escritura, así que:
+Regla: **todo cambio que se hace desde el timeline y queda escrito en el proyecto se
+puede deshacer y rehacer**; lo que no escribe nada (reproducir, mover el playhead,
+zoom, seleccionar, cambiar de herramienta) no entra al historial. Cubre, entre otros:
+crear/mover/estirar/dividir/fusionar/borrar items en cualquier carril, escribir o
+cambiar el texto de un pedido (diálogo o campo de prompt de la marca), cambiar estado
+o aceptación, mover un marcador del autor, subir o bajar un carril, crear, renombrar,
+recolorear o borrar una capa o un carril de recortes, importar una propuesta.
 
-- Antes de escribir: `before = snapshot(lid)` — deep copy del documento afectado
-  (`autor` → `reg.marcas`; `recortes` → `self.w.trims`; `bloques` → `self.w.plan`;
-  capa propia → `store.layers[lid]`). Tras el éxito: `push(lid, before, after)`.
+`HistoryStack` (nuevo `editorial_history.py`, puro): pila de **operaciones** con
+profundidad 50, por medio cargado (se vacía al cambiar de video; no se persiste).
+Cada operación es `{label, targets: [(doc_id, revision_antes)], before, after}` donde
+`before`/`after` son snapshots profundos de los documentos que toca, y `doc_id` es uno
+de: `autor` (lista de marcas del Registro), `trims` (documento completo, lanes
+incluidos), `plan`, `layer:<id>`, `lanes` (`views/lanes.json`). Una operación puede
+tocar varios documentos (borrar un lane moviendo sus cortes a `main` toca `trims` y
+`lanes`): es **una** entrada.
+
+- Los puntos de escritura son pocos y todos registran: `persist`, `persist_many`,
+  `store.save`/`store.delete` (vía un envoltorio en el controlador), el guardado de
+  `lanes.json`, `Registro.editar/agregar/borrar` desde la UI (a través de
+  `Registro.reemplazar`), la importación de propuestas. Cada uno hace
+  `history.record(label, targets, before, after)` tras escribir con éxito.
 - `undo` restaura `before` **por los mismos caminos de guardado** (nunca escribiendo
-  archivos a mano): capas propias `store.save(copia)` (la revisión sube, y la
-  protección frente a respuestas de la AI sigue valiendo); recortes
-  `editorial_trims.save_document`; bloques `editorial_chunks.apply_plan`; marcas del
-  autor requieren un método nuevo `Registro.reemplazar(marcas)` que revalida, guarda
-  y notifica como cualquier edición.
-- Redo = reaplicar `after` igual. Si un documento cambió por fuera (revisión distinta
-  a la del snapshot), la entrada se descarta con aviso en el status en vez de pisar.
+  archivos a mano): capas `store.save(copia)` (la revisión sube y la protección frente
+  a respuestas de la AI sigue valiendo; deshacer un borrado guarda `deleted: false`,
+  cosa que una respuesta de la AI no puede hacer); recortes
+  `editorial_trims.save_document`; bloques `editorial_chunks.apply_plan`; marcas
+  `Registro.reemplazar(marcas)` (método nuevo que revalida, guarda y notifica como
+  cualquier edición); orden `lanes.json` por su guardado. Después: `refrescar_layout`,
+  barra de detalle y selección (se reselecciona el item afectado si sigue existiendo).
+- Redo (Ctrl+R; también Ctrl+Shift+Z y Ctrl+Y) reaplica `after` igual. Una acción
+  nueva tras un undo descarta la rama de redo, como en cualquier editor.
+- Si un documento cambió por fuera (su revisión ya no es la que la entrada esperaba,
+  por ejemplo la AI escribió mientras tanto), la entrada se descarta con aviso en el
+  status en vez de pisar. El status dice qué se deshizo («Deshecho: mover 3
+  recortes»).
+- Los campos de texto: el diálogo de pedido registra al guardar (una entrada por
+  cierre, no por tecla); el prompt de la marca (`e_prompt`) registra al confirmar
+  (Return o perder el foco), como hoy persiste. Ctrl+Z dentro de un campo de texto
+  sigue siendo el deshacer del propio campo (Tk), no el del proyecto: la guarda de
+  foco del keymap ya lo garantiza.
 
 ### 5. Reglas de rendimiento (para que se sienta editor, no visor)
 
@@ -516,6 +542,8 @@ con el código real, para y explica el conflicto antes de escribir código.
 - La fusión de solapes (§10) nunca cruza carriles y nunca cambia el resultado de
   `enabled_intervals` dentro de un carril (la unión de los activos es la misma antes y
   después); un test lo demuestra con documentos aleatorios.
+- Ningún cambio escrito desde el timeline queda fuera del historial (§4): si añades un
+  punto de escritura, registra la operación y prueba su undo/redo en el mismo commit.
 - Las protecciones de `merge_response` (items editados o borrados por el humano nunca
   se pisan; tumba persistente de capas borradas) se aplican a cada capa de una
   respuesta múltiple exactamente igual que hoy a una.
@@ -560,12 +588,21 @@ bordes y del parser de «ir a tiempo». Medición: salto a borde ≤ 30 ms de UI
 anterior/siguiente, play desde el item, aceptar con A / Shift+A (con el campo
 `accepted` de los recortes según §3.1: aditivo, por defecto `false`, la exportación
 sigue usando solo `enabled`), `editorial_history.py` + `Registro.reemplazar`.
-Todo por `persist`. Tests: dividir/recortar en cada tipo de carril (autor, recortes,
+Todo por `persist`. El historial cubre desde esta fase **todos** los puntos de
+escritura que ya existen: items, texto de pedidos (diálogo y `e_prompt`), marcas del
+autor, crear/renombrar/recolorear/borrar capas desde «Capas y comentarios», importar
+propuestas. Tests: dividir/recortar en cada tipo de carril (autor, recortes,
 bloques, capa propia) con sus validaciones; A sobre un recorte persiste `accepted` y
 no altera `enabled_intervals`; un nuevo análisis de silencios conserva `accepted`;
-undo/redo restauran documentos idénticos y se descartan si la revisión cambió por
-fuera. Smoke Tk de una sesión completa: S, [, ], Alt+→, A, Shift+A, Ctrl+Z,
-Ctrl+Shift+Z.
+undo/redo restauran documentos byte a byte idénticos para cada punto de escritura
+(incluido borrar una capa y deshacerlo con `deleted: false`), una operación
+multi-documento es una sola entrada, la rama de redo se descarta tras una acción
+nueva, y una entrada se descarta si la revisión cambió por fuera. Smoke Tk de una
+sesión completa: S, [, ], Alt+→, A, Shift+A, escribir un pedido y cerrarlo, Ctrl+Z
+tres veces, Ctrl+R tres veces, y Ctrl+Z con el foco en un Entry deshace solo el texto.
+**Regla para las fases siguientes:** toda mutación nueva (marquesina, mover el
+conjunto, fusionar solapes, lanes, `lanes.json`, respuestas multicapa) se registra en
+el historial y trae su test de undo/redo; una fase sin eso no se acepta.
 
 **Fase 5 (opcional, con puerta).** `preview_hwaccel` según §6. Solo si el benchmark
 muestra ganancia en ×4 sin regresión en ×1 y con caída a software probada; si no,

@@ -500,3 +500,9 @@ sin cambiar `enabled_intervals`, «Añadir capa» ofrece dos tipos (Recortes: si
 diálogo al dibujar; Pedidos para la AI: diálogo con foco en el pedido y Escape
 guarda), la capa nueva se inserta encima de la seleccionada vía `views/lanes.json`,
 y una sola tecla de toggle (B) entra y sale de la herramienta Corte.
+
+Y deshacer/rehacer generalizado (Ctrl+Z · Ctrl+R): historial de operaciones sobre
+snapshots de los documentos del proyecto (marcas, recortes con lanes, plan, capas,
+orden de carriles), restaurado por los mismos caminos de guardado, con entradas
+multi-documento, descarte si un documento cambió por fuera y la regla de que toda
+mutación nueva de las fases siguientes se registra con su test.
