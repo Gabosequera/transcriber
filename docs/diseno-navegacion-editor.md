@@ -321,7 +321,23 @@ la activa. El scrub sobre las pistas de audio no cambia con la herramienta.
   con previsualización punteada de cada item durante el arrastre y una única
   `persist_many` al soltar (validación de todos antes de escribir; si uno falla, no se
   mueve ninguno y el status explica cuál).
-- Arrastrar un borde cuando hay exactamente un item seleccionado: estira, como hoy.
+- **Bordes = recorte con afordancia, como en DaVinci.** Al pasar el mouse a ≤ 8 px del
+  inicio o del final de cualquier item del carril (esté o no seleccionado), el cursor
+  cambia a `sb_h_double_arrow` y ese borde se resalta (línea vertical de 3 px en el
+  color del item, más clara); sobre el cuerpo el cursor es `fleur` (mover) y en vacío
+  `arrow`. Arrastrar el borde lo lleva hacia donde vayas: agranda o encoge el item por
+  ese lado, con previsualización punteada del nuevo rango y una etiqueta flotante en el
+  canvas («0:12.3 → 0:14.0 · +1,7 s»). El otro borde no se mueve. Al soltar, `persist`
+  con las validaciones de siempre (un borde no cruza al otro: mínimo un fotograma; en
+  «Bloques» mover el límite ajusta al vecino como hoy). Si el item mide menos de 24 px
+  en pantalla, las zonas de borde se reducen a un tercio de su ancho para que el
+  cuerpo siga siendo arrastrable, y un doble click sigue abriendo el editor para
+  ajustar tiempos a mano. Con varios seleccionados, arrastrar un borde recorta solo ese
+  item. Sustituye al comportamiento actual de `hit()` con modo `start`/`end`, que ya
+  existe pero sin cursor, sin resaltado y solo con handles en el seleccionado.
+- El cursor del canvas se cambia **solo cuando cambia el estado** (vacío / cuerpo /
+  borde / herramienta), nunca en cada evento de movimiento, y el hover reutiliza el
+  mismo `hit()` indexado que la barra de detalle.
 - Con selección activa: X, A, Supr, Enter (solo con uno) y las flechas actúan sobre el
   conjunto (§3). Esc vacía la selección. Ctrl+A selecciona todo el carril.
 
@@ -615,8 +631,10 @@ recorta un borde, resta que divide, borrado por cobertura total, bloques que sol
 mueven límites) sobre documentos sintéticos de cada carril. Después la UI: barra de
 herramientas en la columna libre del transporte, acciones `tools.toggle_cut` (B, un
 toggle) y `tools.select` (V) en el keymap y visibles en Ajustes → Atajos, cursores,
-marquesina, arrastre del conjunto con previsualización, Corte con Shift y Ctrl, click
-corto que selecciona.
+marquesina, arrastre del conjunto con previsualización, recorte por bordes con cursor
+`sb_h_double_arrow`, borde resaltado, previsualización y etiqueta de tiempo (zonas de
+borde reducidas en items estrechos), Corte con Shift y Ctrl, click corto que
+selecciona.
 Hit-test y marquesina por `visible_parts`. Incluye `coalesce(lane)` (§10) con tests:
 solape estricto se funde con las reglas del actor, contacto por el borde no, idempotente,
 y `enabled_intervals` idéntico antes y después sobre documentos aleatorios. Crear en un
@@ -626,7 +644,11 @@ pedido; Escape persiste el texto). Smoke Tk: marquesina de 3 recortes → X → 
 tres desactivados con una sola revisión nueva de `trims.json`; arrastre del conjunto →
 un solo guardado; caja que pisa dos recortes → queda uno; Shift+caja dentro de un
 recorte → dos recortes que conservan `accepted`; Ctrl+arrastre en Corte → mueve;
-Ctrl+Z deshace cada gesto entero. Medición:
+hover a 5 px del final de un recorte no seleccionado → `tl.cget("cursor")` es
+`sb_h_double_arrow` y el borde está resaltado; arrastrar ese borde 40 px → solo
+`t_fin` cambia, el inicio no, y la etiqueta flotante mostró el delta; en un item de
+15 px el cuerpo sigue moviéndose desde su centro; Ctrl+Z deshace cada gesto entero.
+Medición:
 mover 200 recortes seleccionados ≤ 100 ms desde soltar hasta redibujado; hover con
 5.000 recortes en el carril sin tocar la lista entera (perfilar `hit`).
 

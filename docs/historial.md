@@ -506,3 +506,9 @@ snapshots de los documentos del proyecto (marcas, recortes con lanes, plan, capa
 orden de carriles), restaurado por los mismos caminos de guardado, con entradas
 multi-documento, descarte si un documento cambió por fuera y la regla de que toda
 mutación nueva de las fases siguientes se registra con su test.
+
+Detalle añadido a la herramienta Selección: recorte por bordes al estilo DaVinci
+(cursor de doble flecha y borde resaltado al acercarse a ≤ 8 px del inicio o el
+final de cualquier item, arrastre que agranda o encoge solo ese lado con
+previsualización y etiqueta de tiempo, zonas reducidas en items estrechos, cursor
+cambiado solo cuando cambia el estado).
