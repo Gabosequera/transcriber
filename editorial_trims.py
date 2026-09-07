@@ -41,6 +41,12 @@ LANE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}\Z")
 # `lanes` equivale a estos dos; un corte sin `lane` se deriva de su origen.
 DEFAULT_LANES = ({"lane_id": "main", "name": "Recortes", "color": "#728bd0"},
                  {"lane_id": "ai", "name": "Cortes sugeridos (AI)", "color": "#9471bd"})
+# Carril de la Tarea 2 «modo profundo» (plan-montaje-ai.md §5): se declara con `add_lane`
+# la primera vez que se prepara o importa ese modo (esquema aditivo: los archivos viejos
+# no cambian). Color distinto al violeta de `ai` para aceptar o descartar la pasada en bloque.
+DEEP_LANE = {"lane_id": "ai-deep", "name": "Cortes profundos (AI)", "color": "#b5638a"}
+DEEP_PREFIX = "[profundo] "
+MODES = ("content", "deep")
 
 DEFAULT_SILENCE = {
     "min_gap": 1.0,            # s — hueco mínimo sin voz para considerarlo
@@ -188,6 +194,17 @@ def add_lane(document: dict, name: str, *, color: str = "#c58e43", lane_id: str 
     lane = {"lane_id": lane_id, "name": (name or "").strip() or "Recortes", "color": color}
     document["lanes"] = current + [lane]
     return lane
+
+
+def ensure_lane(document: dict, lane_id: str) -> dict:
+    """Declara un carril de la AI si falta (`ai-deep` con su nombre y color de fábrica;
+    otro `ai*` con un nombre derivado). Devuelve la entrada."""
+    for lane in lanes(document):
+        if lane["lane_id"] == lane_id:
+            return lane
+    if lane_id == DEEP_LANE["lane_id"]:
+        return add_lane(document, DEEP_LANE["name"], color=DEEP_LANE["color"], lane_id=lane_id)
+    return add_lane(document, f"Cortes de la AI ({lane_id})", color="#9471bd", lane_id=lane_id)
 
 
 def remove_lane(document: dict, lane_id: str, *, move_to: str | None = "main") -> int:
@@ -647,6 +664,14 @@ def validate_proposal(document: dict, master: dict, plan: dict | None = None, *,
     if document.get("source_master_digest") != expected:
         raise ValueError("la propuesta pertenece a otro master o a metadata desactualizada "
                          "(source_master_digest)")
+    # modo y carril de destino (§5): `deep` cae en `ai-deep`; la AI SOLO escribe en
+    # carriles cuyo id empieza por «ai» (nunca en «main» ni en los del usuario)
+    mode = str(document.get("mode") or "content")
+    if mode not in MODES:
+        raise ValueError(f"mode desconocido: {mode!r} (content|deep)")
+    lane = str(document.get("lane") or (DEEP_LANE["lane_id"] if mode == "deep" else "ai"))
+    if not LANE_ID.fullmatch(lane) or not lane.startswith("ai"):
+        raise ValueError(f"la AI solo escribe en carriles «ai*», no en {lane!r}")
     cuts = document.get("cuts")
     if not isinstance(cuts, list):
         raise ValueError("cuts debe ser una lista")
@@ -697,6 +722,8 @@ def validate_proposal(document: dict, master: dict, plan: dict | None = None, *,
         reason = str(cut.get("reason") or "").strip()
         if not reason:
             warnings.append("la AI no explicó este recorte")
+        elif mode == "deep" and not reason.startswith(DEEP_PREFIX):
+            reason = DEEP_PREFIX + reason      # se lee en el tooltip y en trim-review.md
         confidence = cut.get("confidence", 0.5)
         confidence = max(0.0, min(1.0, finite_time(confidence, name=f"{label}.confidence")))
         normalized.append({
@@ -706,28 +733,34 @@ def validate_proposal(document: dict, master: dict, plan: dict | None = None, *,
             "warnings": warnings,
         })
     return {**document, "planner": str(document.get("planner") or "agent"),
-            "source_master_digest": expected, "cuts": normalized}
+            "source_master_digest": expected, "mode": mode, "lane": lane, "cuts": normalized}
 
 
 def merge_proposal(document: dict, proposal: dict, *, proposal_digest: str) -> dict:
-    """Incorpora la propuesta validada: reemplaza los recortes de la AI que el usuario no
-    tocó; los editados por él se conservan. Idempotente por digest."""
+    """Incorpora la propuesta validada en SU carril (`ai` o `ai-deep`): reemplaza los
+    recortes de la AI de ese carril que el usuario no tocó; los editados por él y los
+    de los demás carriles se conservan. Idempotente por digest."""
     if (document.get("ai") or {}).get("proposal_digest") == proposal_digest:
         return document
-    kept = [cut for cut in document["cuts"] if cut["origin"] != "ai" or cut.get("edited")]
+    lane = proposal.get("lane") or "ai"
+    ensure_lane(document, lane)
+    kept = [cut for cut in document["cuts"]
+            if cut["origin"] != "ai" or cut.get("edited") or cut_lane(cut) != lane]
     for cut in proposal["cuts"]:
         evidence = {"planner": proposal["planner"], "proposal_digest": proposal_digest,
+                    "mode": proposal.get("mode", "content"),
                     "semantic": [cut["semantic_t_ini"], cut["semantic_t_fin"]],
                     "first_utterance_id": cut.get("first_utterance_id"),
                     "last_utterance_id": cut.get("last_utterance_id")}
-        kept.append(_new_cut(document, cut["t_ini"], cut["t_fin"], origin="ai",
+        kept.append(_new_cut(document, cut["t_ini"], cut["t_fin"], origin="ai", lane=lane,
                              reason=cut["reason"], confidence=cut["confidence"],
                              chunk_id=cut.get("chunk_id"), evidence=evidence,
                              warnings=cut["warnings"]))
     document["cuts"] = kept
     sort_cuts(document)
-    coalesce(document, lane="ai")              # solapes dentro del carril (§10)
+    coalesce(document, lane=lane)              # solapes dentro del carril (§10)
     document["ai"] = {"planner": proposal["planner"], "proposal_digest": proposal_digest,
+                      "mode": proposal.get("mode", "content"), "lane": lane,
                       "imported_at": _now(), "count": len(proposal["cuts"])}
     return document
 
@@ -764,6 +797,8 @@ def review_blocks(master: dict, plan: dict | None) -> list[dict]:
 
 def _cut_marker(cut: dict) -> str:
     origin = {"silence": "silencio", "ai": "AI", "user": "usuario"}[cut["origin"]]
+    if cut["origin"] == "ai" and cut_lane(cut) == DEEP_LANE["lane_id"]:
+        origin = "propuesto por la AI (profundo)"
     seconds = cut["t_fin"] - cut["t_ini"]
     return (f"⟂ RECORTE `{cut['cut_id']}` · {origin}"
             + (" · aceptado por el editor" if cut.get("accepted") else "")
@@ -818,9 +853,13 @@ def review_markdown(master: dict, block: dict, document: dict | None) -> str:
 
 
 def agent_request_markdown(master: dict, blocks: list[dict], document: dict | None, *,
-                           layers_digest: str | None = None) -> str:
+                           mode: str = "content", layers_digest: str | None = None) -> str:
+    if mode not in MODES:
+        raise ValueError(f"mode desconocido: {mode!r}")
+    deep = mode == "deep"
     digest = editorial_chunks.source_master_digest(master)
     summary = stats(document)
+    accepted = sum(1 for cut in ((document or {}).get("cuts") or []) if cut.get("accepted"))
     listing = "\n".join(
         f"- {block['folder']}/trim-review.md — {block['title']}"
         + (f" (`{block['chunk_id']}`)" if block["chunk_id"] else "")
@@ -829,26 +868,59 @@ def agent_request_markdown(master: dict, blocks: list[dict], document: dict | No
     # la foto de capas con la que se preparó: la etiqueta de estado del panel avisa
     # «pedido viejo» si el humano edita recortes o capas antes de que la AI responda
     layers_line = f"source_layers_digest: {layers_digest}\n" if layers_digest else ""
-    return f"""# Solicitud de recortes de contenido — Transcriptor
-
-Usa la skill `transcriptor` (`skills/transcriptor/SKILL.md`), sección «Recortes de
-contenido». Esta es la SEGUNDA pasada: la primera (heurística de silencios + revisión
-humana) ya dejó {summary['enabled']} recortes activos ({format_time(summary['removed_seconds'])}
-en total). Están marcados como `⟂ RECORTE` dentro de cada revisión.
-
-source_master_digest: {digest}
-{layers_line}Duración total: {master['media']['duration']:.3f} segundos. Tiempos absolutos del video original.
-
-Bloques a revisar (lee cada archivo COMPLETO antes de proponer nada de ese bloque):
-{listing}
-
-Objetivo: proponer recortes NUEVOS de partes que no aportan a la conversación del bloque:
+    mode_lines = f"mode: deep\nlane: {DEEP_LANE['lane_id']}\n" if deep else ""
+    if deep:
+        title = "Solicitud de recortes de contenido · MODO PROFUNDO — Transcriptor"
+        intro = (f"Usa la skill `transcriptor` (`skills/transcriptor/SKILL.md`), sección «Tarea 2 · "
+                 f"modo profundo». La pasada anterior fue tímida: hay {summary['enabled']} recortes "
+                 f"activos ({format_time(summary['removed_seconds'])} en total; {accepted} aceptados "
+                 "por el editor), marcados como `⟂ RECORTE` dentro de cada revisión. El editor pide "
+                 "una lectura más exigente de AMBAS pistas.")
+        objective = """Objetivo: leer las intervenciones de TODAS las pistas como una sola conversación y
+proponer quitar, tramo por tramo, lo que no le aporta a quien escucha el episodio
+terminado: tangentes sin retorno (nadie las retoma ni las convierte en chiste), lectura
+en voz alta (pantalla, guion, chat, título) sin comentarla, explicaciones que se alargan
+cuando el punto ya se entendió, repeticiones, acuerdos vacíos, tramos sin sentido ni
+dirección, arranques en falso, y la parte meta/técnica («¿se escucha?», «eso se corta»,
+leer el guion para decidir qué sigue). Recortes de 5 s a 3 min en límites de
+intervención; puedes abarcar varios `⟂ RECORTE` existentes si el tramo completo sobra,
+pero NUNCA uno «aceptado por el editor» ni uno desactivado.
+Qué NO es motivo de recorte, nunca: lisuras, insultos, humor negro, chistes fuertes,
+comentarios ofensivos, «cosas funables», contenido subido de tono. Si un tramo es
+ofensivo pero es divertido o mueve la conversación, se queda: tu criterio es aporte a
+la conversación, no corrección del contenido. Si te descubres escribiendo «ofensivo»,
+«inapropiado», «fuerte» o «incómodo» en `reason`, borra ese recorte. Relee 30 s antes
+y después de cada candidato (setup de un payoff, pregunta con respuesta, reacción con
+risa o arousal → no). No hay cuota: si el bloque está apretado, di que no hay más."""
+        header_extra = '  "mode": "deep",\n  "lane": "ai-deep",\n'
+        tail = (f"La app pinta estos recortes en un carril aparte, «{DEEP_LANE['name']}», para que "
+                "el humano acepte o descarte la pasada en bloque sin mezclarla con la primera.")
+    else:
+        title = "Solicitud de recortes de contenido — Transcriptor"
+        intro = (f"Usa la skill `transcriptor` (`skills/transcriptor/SKILL.md`), sección «Recortes de\n"
+                 f"contenido». Esta es la SEGUNDA pasada: la primera (heurística de silencios + revisión\n"
+                 f"humana) ya dejó {summary['enabled']} recortes activos ({format_time(summary['removed_seconds'])}\n"
+                 "en total). Están marcados como `⟂ RECORTE` dentro de cada revisión.")
+        objective = """Objetivo: proponer recortes NUEVOS de partes que no aportan a la conversación del bloque:
 tangentes que no llevan a nada, balbuceo, muletillas largas, arranques en falso repetidos,
 charla técnica («¿se escucha?»), tramos que rompen la continuidad del tema/subtema.
 NO propongas recortes por humor subido de tono, chistes incómodos, lisuras, insultos o
 términos ofensivos/discriminatorios: eso lo quita el editor humano después, en post.
 Interpreta ese humor como humor. Conserva todo lo que dé diversión, historia, reacción,
-setup de un payoff posterior, o continuidad. Ante la duda, no recortes.
+setup de un payoff posterior, o continuidad. Ante la duda, no recortes."""
+        header_extra = ""
+        tail = "La app muestra tus recortes en violeta en el timeline y el humano decide antes de cortar."
+    return f"""# {title}
+
+{intro}
+
+source_master_digest: {digest}
+{layers_line}{mode_lines}Duración total: {master['media']['duration']:.3f} segundos. Tiempos absolutos del video original.
+
+Bloques a revisar (lee cada archivo COMPLETO antes de proponer nada de ese bloque):
+{listing}
+
+{objective}
 
 Escribe `views/trims.proposed.json` (relativo a la carpeta editorial):
 
@@ -856,7 +928,7 @@ Escribe `views/trims.proposed.json` (relativo a la carpeta editorial):
   "schema": "editorial-trims-proposal/1",
   "planner": "<nombre de la AI>",
   "source_master_digest": "{digest}",
-  "cuts": [
+{header_extra}  "cuts": [
     {{"chunk_id": "chunk-001", "t_ini": 1834.2, "t_fin": 1871.9,
       "first_utterance_id": "A-u-000412", "last_utterance_id": "B-u-000380",
       "reason": "tangente sobre el router que no vuelve al tema", "confidence": 0.7}}
@@ -868,13 +940,13 @@ de su bloque; bordes en límites de intervención (la app los ajusta hasta {PROP
 para no partir palabras ni risas); IDs de intervención existentes o ausentes; `reason`
 concreta apoyada en la conversación; `confidence` 0..1. Una lista vacía es válida si el
 bloque no tiene nada prescindible. Escribe a un temporal y renómbralo al terminar.
-No modifiques `trims.json`, el master ni `chunks.json`: los gestiona la app. La app
-muestra tus recortes en violeta en el timeline y el humano decide antes de cortar.
+No modifiques `trims.json`, el master ni `chunks.json`: los gestiona la app. {tail}
 """
 
 
 def write_review_package(root: str | Path, master: dict, plan: dict | None,
-                         document: dict | None, *, layers_digest: str | None = None) -> dict[str, Path]:
+                         document: dict | None, *, mode: str = "content",
+                         layers_digest: str | None = None) -> dict[str, Path]:
     root = Path(root)
     blocks = review_blocks(master, plan)
     paths = {}
@@ -883,7 +955,7 @@ def write_review_package(root: str | Path, master: dict, plan: dict | None,
         paths[block["chunk_id"] or "completo"] = atomic_write_text(
             target, review_markdown(master, block, document))
     paths["request"] = atomic_write_text(root / "views" / "trim-agent-request.md",
-                                         agent_request_markdown(master, blocks, document,
+                                         agent_request_markdown(master, blocks, document, mode=mode,
                                                                 layers_digest=layers_digest))
     return paths
 

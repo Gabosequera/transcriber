@@ -101,6 +101,12 @@ def _stale(request_digest, layers_digest) -> bool:
     return bool(request_digest) and bool(layers_digest) and request_digest != layers_digest
 
 
+def _after(proposed_at, request_at) -> bool:
+    """Una propuesta cuenta para un pedido solo si se escribió DESPUÉS de él: la del
+    ciclo anterior (más vieja que el pedido nuevo) no es una respuesta a este."""
+    return proposed_at is not None and request_at is not None and proposed_at > request_at
+
+
 def _topics_status(views, request, *, full, layers_digest, last_error, trim_request_text):
     kind = "full" if full else "topics"
     request_id = request.get("request_id")
@@ -125,8 +131,8 @@ def _topics_status(views, request, *, full, layers_digest, last_error, trim_requ
         return _result("topics_pass2", f"Pasada 1 validada ({topics} temas, {subtopics} subtemas). "
                        "Esperando la pasada 2 en topics.proposed.json.", kind=kind, error=last_error)
     proposed_at = _mtime(views / "topics.proposed.json")
-    topics_at = _mtime(views / "topics-request.json") or 0.0
-    if proposed_at is not None and proposed_at >= topics_at - 1.0 and last_error:
+    topics_at = _mtime(views / "topics-request.json")
+    if _after(proposed_at, topics_at) and last_error:
         return _result("topics_rejected", "topics.proposed.json apareció pero no se validó.",
                        kind=kind, error=last_error)
     return _result("topics_pass1", "Pedido de temas listo (pasada 1). Esperando topics.proposed.json."
@@ -144,7 +150,7 @@ def _trims_status(views, request_text, request_at, layers_digest, last_error, *,
     proposed_at = _mtime(proposed_path)
     trims = _json(views / "trims.json")
     imported = None
-    if proposed_at is not None and request_at is not None and proposed_at >= request_at - 1.0:
+    if _after(proposed_at, request_at):
         proposal = _json(proposed_path)
         ai = (trims or {}).get("ai") or {}
         if proposal is not None and ai.get("proposal_digest") == digest_json(proposal):
@@ -158,7 +164,7 @@ def _trims_status(views, request_text, request_at, layers_digest, last_error, *,
                        "Revísalos en el timeline antes de exportar.", kind=kind)
     if stale:
         return _result("stale", STALE_TEXT, kind=kind, stale=True, error=last_error)
-    if proposed_at is not None and request_at is not None and proposed_at >= request_at - 1.0 and last_error:
+    if _after(proposed_at, request_at) and last_error:
         return _result("trims_rejected", "trims.proposed.json apareció pero no se importó.",
                        kind=kind, error=last_error)
     if after_topics:
@@ -188,7 +194,7 @@ def _montage_status(views, request, request_at, layers_digest, last_error):
                        "pide la pasada siguiente.", kind=kind)
     if stale:
         return _result("stale", STALE_TEXT, kind=kind, stale=True, error=last_error)
-    if proposed_at is not None and request_at is not None and proposed_at >= request_at - 1.0 and last_error:
+    if _after(proposed_at, request_at) and last_error:
         return _result("montage_rejected", "montaje.proposed.json apareció pero no se importó.",
                        kind=kind, error=last_error)
     return _result("montage_request", f"Pedido de montaje listo (pasada {wanted}"

@@ -565,6 +565,21 @@ intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
   menor que el vivo (el worker lo había leído antes de una edición del timeline);
   `podcast_export` reintenta el `os.rename` final ante un `PermissionError`
   transitorio de Windows.
+- **Fase B (hecha, 0.3.7)** — Tarea 2 «modo profundo». `editorial_trims`: `MODES`,
+  `DEEP_LANE` (`ai-deep`, «Cortes profundos (AI)», `#b5638a`, declarado con
+  `ensure_lane` al importar: esquema aditivo), `agent_request_markdown(mode=)` escribe
+  `mode: deep` / `lane: ai-deep` y el objetivo del modo profundo (incluida la lista de
+  lo que NUNCA es motivo); `validate_proposal` acepta `mode` (`content|deep`) y `lane`
+  en la cabecera y rechaza cualquier lane que no empiece por `ai` (la AI jamás escribe
+  en «main» ni en carriles del usuario), prefija `reason` con «[profundo] »;
+  `merge_proposal` reemplaza SOLO los cortes de la AI del carril de la propuesta (una
+  pasada normal no toca los profundos y viceversa) y guarda `mode`/`lane` en
+  `document["ai"]`; `_cut_marker` marca «propuesto por la AI (profundo)» en
+  `trim-review.md`. UI: «Recortes profundos» en el desplegable (`_prepare_review(mode=
+  "deep")`); el carril nuevo se ordena entre `trims:ai` y `trims:main`.
+  `editorial_cycle` lee `mode: deep` del pedido y el nombre del carril del import; una
+  propuesta solo cuenta para un pedido si es estrictamente posterior a él (`_after`).
+  `tests/test_deep_trims.py` (4 tests) y bloque nuevo en el smoke.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

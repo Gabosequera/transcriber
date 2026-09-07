@@ -117,6 +117,60 @@ agrega; solo al pulsar **Exportar con recortes** se aplican, quitando tanto los 
 la heurística como tus recortes. Si la metadata es incompleta, indica qué falta y no
 presentes una propuesta parcial como completa.
 
+### Tarea 2 · modo profundo — recortes de contenido agresivos
+
+Se pide cuando la primera pasada de recortes fue tímida y el editor quiere una
+lectura más exigente. El pedido lo dice con `mode: deep` y la lane de destino
+(`lane: ai-deep`). Lee `trim-agent-request.md` y TODOS los `trim-review.md` como en
+la Tarea 2, más la capa «Temas y subtemas» de `layers.json` si existe: es tu mapa.
+
+Qué buscas. Lee las intervenciones de TODAS las pistas como una sola conversación
+(están intercaladas por tiempo) y pregúntate, tramo por tramo, si ese minuto le
+aporta algo a quien escucha el episodio terminado. Propón quitar:
+
+- **Tangentes sin retorno**: hablan de algo que no tiene que ver con el tema en
+  curso y nadie lo retoma ni lo convierte en chiste. Si la tangente termina en una
+  reacción (risa, sorpresa, remate), NO es una tangente sin retorno.
+- **Lectura en voz alta**: leen la pantalla, un guion, un chat, un título, un
+  comentario, y no lo comentan ni lo convierten en conversación. Señales en el texto:
+  frases largas sin muletillas, enumeraciones, «dice que…», cambios bruscos de
+  registro, y silencio de la otra pista mientras uno lee.
+- **Tramos que no son divertidos ni informativos**: explicaciones que se alargan
+  cuando el punto ya se entendió, repeticiones de lo mismo con otras palabras,
+  «¿me explico?» seguido de la misma explicación, acuerdos vacíos («sí, sí, claro,
+  exacto») de más de unos segundos sin contenido.
+- **Sin sentido ni dirección**: nadie sabe de qué hablan, se pisan sin que salga nada,
+  balbuceo, arranques en falso repetidos, «¿de qué estábamos hablando?» seguido de
+  otro tema.
+- **Meta y técnica**: «¿se escucha?», «se me trabó», «eso se corta», «vamos a hacer
+  una pausa», «3, 2, 1, acción», leer los temas del guion para decidir qué sigue.
+  Conserva la parte meta SOLO si es un chiste que funciona por sí mismo.
+
+Qué NO es motivo de recorte, nunca: lisuras, insultos, humor negro, chistes fuertes,
+comentarios ofensivos, «cosas funables», contenido subido de tono. Ese material se
+conserva y lo decide el editor humano en post; tu criterio es aporte a la
+conversación, no corrección del contenido. Si un tramo es ofensivo pero es divertido
+o mueve la conversación, se queda. Si te descubres escribiendo en `reason`
+palabras como «ofensivo», «inapropiado», «fuerte», «incómodo», borra ese recorte.
+
+Cómo decides. Para cada candidato relee 30 s antes y 30 s después: ¿alguien vuelve a
+esto más tarde (setup de un payoff)? ¿La risa o el arousal de las señales suben en el
+tramo o justo después (reacción que vale)? ¿Es la pregunta de una respuesta que sí
+vale? Entonces no. Usa risa/arousal/intensidad como evidencia secundaria: un tramo
+muerto tiene texto plano Y señales planas; una reacción tiene picos.
+
+Tamaño y bordes. Recortes de 5 s a 3 min, en límites de intervención, con
+`first/last_utterance_id`. Puedes proponer un recorte que abarque varios `⟂ RECORTE`
+ya existentes si el tramo completo sobra, pero nunca uno que contenga un recorte
+«aceptado por el editor» ni uno «desactivado» (esos ya los decidió la persona).
+Ordena por tiempo. No hay cuota: si el bloque está apretado, di que no hay más.
+
+Cabecera de `trims.proposed.json`: igual que la Tarea 2 más `"mode": "deep"` y
+`"lane": "ai-deep"`. `reason` concreta y citando la conversación («leen el chat de
+Twitch durante 40 s y no lo comentan»). `confidence` honesta: 0,5 si dudas. La app
+pinta tus recortes en el carril «Cortes profundos (AI)», aparte de los de la primera
+pasada, para que la persona acepte o descarte esta pasada en bloque.
+
 ## Tarea 3 — Temas/subtemas y recurrencias, en dos pasadas
 
 1. Lee `views/topics-agent-request.md` y `topics-request.json`. Copia request_id,

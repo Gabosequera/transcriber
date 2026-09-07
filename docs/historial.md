@@ -698,3 +698,20 @@ transitorio de Windows. 129 tests y smoke completo (con las comprobaciones nueva
 etiqueta de estado, pedido viejo, botones ocultos en el hijo y «Cancelar» visible
 mientras trabaja). Probado contra el proyecto real: pendiente hasta reinstalar la
 release con la app cerrada.
+
+## 2026-09-07 — Tarea 2 «modo profundo»: recortes de contenido agresivos (0.3.7)
+
+Fase B del plan. Después de la primera revisión editorial la AI propuso solo tres
+recortes; Gabriel quiere poder pedirle explícitamente una lectura más exigente de las
+dos pistas (tangentes sin retorno, lectura en voz alta, lo que no es divertido ni
+lleva a ningún lado, meta y técnica), con la regla dura de nunca recortar por lisuras,
+insultos, humor negro ni contenido «funable». La sección «Tarea 2 · modo profundo» de
+la skill lo dice con detalle; «Preparar para la AI ▾ → Recortes profundos» escribe el
+paquete de la Tarea 2 con `mode: deep` y `lane: ai-deep`; la propuesta (`"mode":
+"deep"`) cae en un carril propio «Cortes profundos (AI)» (rosa, declarado al importar
+sin migrar archivos viejos) con el motivo precedido por «[profundo]», para aceptar o
+descartar la pasada en bloque. La AI solo puede escribir en carriles `ai*`; cada
+pasada reemplaza únicamente los cortes de la AI de su carril. Cuatro tests nuevos
+(pedido, import a carril propio conservando la primera pasada, rechazo de `lane:
+main`, archivo viejo sin el carril) y el smoke prepara el pedido profundo, importa
+una propuesta y comprueba el carril, el orden y la etiqueta de estado. 133 tests.

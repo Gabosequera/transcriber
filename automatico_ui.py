@@ -659,6 +659,7 @@ class AutomaticWorkspace:
         "full": ("Revisión completa (temas + recortes)", "_prepare_editorial"),
         "topics": ("Solo temas", "_prepare_topics"),
         "trims": ("Solo recortes", "_prepare_review"),
+        "deep": ("Recortes profundos", "_prepare_review_deep"),
     }
 
     def _ai_menu(self):
@@ -1460,17 +1461,23 @@ class AutomaticWorkspace:
                 trims_path, path, data, plan, fingerprint=data["media"].get("fingerprint"))
             index = editorial_trims.BoundaryIndex(data)
             flagged = sum(1 for cut in proposal["cuts"] if cut["warnings"])
+            lane = next((l for l in editorial_trims.lanes(document) if l["lane_id"] == proposal.get("lane")),
+                        None)
+            where = f"en el carril «{lane['name']}»" if lane else "en violeta"
             self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(trims_path),
                              "doc": document, "index": index, "quiet": False,
                              "history": "importar recortes de la AI", "trims_before": trims_before,
-                             "message": (f"Propuesta de la AI ({proposal['planner']}): "
-                                         f"{len(proposal['cuts'])} recortes de contenido"
+                             "message": (f"Propuesta de la AI ({proposal['planner']}"
+                                         + (", modo profundo" if proposal.get("mode") == "deep" else "")
+                                         + f"): {len(proposal['cuts'])} recortes de contenido"
                                          + (f", {flagged} con avisos" if flagged else "")
-                                         + ". Aparecen en violeta; revísalos antes de cortar.")})
+                                         + f". Aparecen {where}; revísalos antes de exportar.")})
         self._background(work, label="import:trims")
 
-    def _prepare_review(self):
-        """«Preparar para la AI → Solo recortes»: el paquete de la Tarea 2."""
+    def _prepare_review(self, mode="content"):
+        """«Preparar para la AI → Solo recortes» (o «Recortes profundos», `mode="deep"`):
+        el paquete de la Tarea 2. En modo profundo el pedido lleva `mode: deep` y
+        `lane: ai-deep`, y la app declara el carril «Cortes profundos (AI)» al importar."""
         master = self._master_path()
         if not master or self.trims is None:
             self._append_log("Para pedir recortes hace falta la metadata y el documento de recortes "
@@ -1478,13 +1485,21 @@ class AutomaticWorkspace:
             return
         plan, document = self.plan, self.trims
         digest = self.layers.snapshot()["source_layers_digest"] if self.layers.store else None
+        deep = mode == "deep"
 
         def work():
             data = read_json(master)
             paths = editorial_trims.write_review_package(master.parent, data, plan, document,
-                                                         layers_digest=digest)
-            self.events.put({"tipo": "review_written", "request": paths["request"]})
+                                                         mode=mode, layers_digest=digest)
+            self.events.put({"tipo": "review_written", "request": paths["request"],
+                             "hint": ("Pide a la AI la «Tarea 2 · modo profundo» de la skill; sus "
+                                      "recortes irán al carril «Cortes profundos (AI)»." if deep else
+                                      "Pide a la AI la Tarea 2 de la skill transcriptor; su "
+                                      "trims.proposed.json se importa solo al aparecer.")})
         self._background(work, label="prepare:trims")
+
+    def _prepare_review_deep(self):
+        self._prepare_review(mode="deep")
 
     def _export_trims(self):
         if not self.info or self.trims is None:

@@ -199,6 +199,23 @@ sobre el bloque ya acortado:
    su motivo. Una nueva propuesta reemplaza los recortes de la AI que no hayas tocado;
    los que moviste o desactivaste se conservan.
 
+### Recortes profundos (segunda pasada, más agresiva)
+
+Si la primera pasada de la AI fue tímida (tres recortes en 40 minutos), **Preparar para
+la AI ▾ → Recortes profundos** escribe el mismo paquete con `mode: deep` y `lane: ai-deep`
+en `views/trim-agent-request.md`, y le pide a la AI la sección «Tarea 2 · modo profundo»
+de la skill: leer las dos pistas como una sola conversación y proponer quitar tangentes
+sin retorno, lecturas en voz alta que nadie comenta, explicaciones que se alargan, tramos
+sin dirección y la parte meta o técnica, con recortes de 5 s a 3 min. La regla dura no
+cambia: **jamás por lisuras, insultos, humor negro ni contenido «funable»**; eso lo
+decide la persona en post. La respuesta (`trims.proposed.json` con `"mode": "deep"`) se
+importa sola y aparece en un carril aparte, **Cortes profundos (AI)** (rosa), encima de
+«Cortes sugeridos (AI)», con el motivo precedido por «[profundo]»: así aceptas o descartas
+esa pasada en bloque (marquesina + `E` o `X`) sin mezclarla con la primera. Una pasada
+profunda nueva reemplaza solo los cortes profundos que no tocaste; una pasada normal
+posterior no toca los profundos. Lo que se exporta sigue siendo la unión de los activos
+de todos los carriles.
+
 ## 5. Exportar con recortes
 
 **Exportar con recortes** (sección RECORTES) pide una carpeta de salida y produce, dentro de

@@ -48,7 +48,11 @@ def main():
             if predicate():
                 return
             time.sleep(.02)
-        raise AssertionError("timeout en smoke de UI")
+        try:
+            tail = workspace.log.get("end-8l", "end").strip()
+        except Exception:
+            tail = ""
+        raise AssertionError("timeout en smoke de UI; consola:\n" + tail)
 
     try:
         spin(lambda: workspace.info is not None and len(workspace.track_widgets) == 2)
@@ -556,6 +560,25 @@ def main():
         assert by_id[ai_ids[0]]["accepted"] and by_id[ai_ids[0]]["enabled"]
         if len(ai_ids) > 1:
             assert not by_id[ai_ids[1]]["enabled"]
+        # ---- Fase B: recortes profundos → carril propio «Cortes profundos (AI)», la primera pasada queda ----
+        workspace._prepare_review(mode="deep")
+        spin(lambda: not workspace.worker.is_alive())
+        spin(lambda: workspace.cycle_label.cget("text").startswith("Pedido de recortes profundos"))
+        request_text = (views / "trim-agent-request.md").read_text(encoding="utf-8")
+        assert "mode: deep" in request_text and "lane: ai-deep" in request_text
+        deep = dict(proposal, mode="deep", lane="ai-deep",           # el hijo dura 8 s
+                    cuts=[dict(t_ini=7.0, t_fin=7.6, reason="lectura del chat sin comentar", confidence=.6)])
+        workspace._import_trims(editorial_io.atomic_write_json(views / "trims.proposed.json", deep))
+        spin(lambda: not workspace.worker.is_alive() and any(c["lane"] == "ai-deep" for c in workspace.trims["cuts"]))
+        app.update()
+        deep_lane = controller.find("trims:ai-deep")[0]
+        assert deep_lane["name"] == "Cortes profundos (AI)" and len(deep_lane["items"]) == 1
+        assert deep_lane["items"][0]["comment"].startswith("[profundo] ")
+        assert all(c["cut_id"] in {x["cut_id"] for x in workspace.trims["cuts"]} for c in by_id.values())
+        order = controller.order_ids()
+        assert order.index("trims:ai") < order.index("trims:ai-deep") < order.index("trims:main"), order
+        spin(lambda: "Cortes profundos (AI)" in workspace.cycle_label.cget("text"))
+        by_id = {c["cut_id"]: c for c in workspace.trims["cuts"]}
         # la exportación une los activos de AMBOS carriles e ignora los desactivados de ambos
         import podcast_export
         out = podcast_export.export_plan(Path(workspace.result["master"]), None, workspace.info["path"],
