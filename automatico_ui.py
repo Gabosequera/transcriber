@@ -645,10 +645,20 @@ class AutomaticWorkspace:
         toolbar_ui.Tooltip(self.trim_export_button, "Aplica los recortes activos y crea un video "
                            "nuevo con su proyecto hijo (temas y capas heredados). El original "
                            "no se toca.")
+        self.open_export_button = ctk.CTkButton(box, text="Abrir el video recortado", height=26,
+                                                fg_color="#2f6b4f", hover_color="#37805e",
+                                                command=self._open_exported_child)
+        self.open_export_button.grid(row=4, column=0, sticky="ew", padx=10, pady=(0, 4))
+        self.open_export_button.grid_remove()           # aparece al terminar una exportación
+        toolbar_ui.Tooltip(self.open_export_button, "Importa el video recién exportado y carga su "
+                           "proyecto hijo: la transcripción, los temas y las capas ya vienen "
+                           "en el reloj del video corto.")
+        self._export_child = None
+        self._pending_child_master = None
         self.skip_check = ctk.CTkCheckBox(box, text="Saltar recortes al reproducir", height=20,
                                           checkbox_width=14, checkbox_height=14,
                                           text_color="#c6cec9", font=ctk.CTkFont(size=10))
-        self.skip_check.grid(row=4, column=0, sticky="w", padx=10, pady=(0, 6))
+        self.skip_check.grid(row=5, column=0, sticky="w", padx=10, pady=(0, 6))
         toolbar_ui.Tooltip(self.skip_check, "Al reproducir, salta los tramos recortados activos "
                            "(re-arranca la sesión al final de cada uno). Ayuda de revisión, "
                            "no el render.")
@@ -797,6 +807,8 @@ class AutomaticWorkspace:
                        self.silence_button, self.trim_export_button, self.ai_button, self.ai_arrow):
             button.configure(state="disabled")
         self._last_import_error = None
+        self._export_child = None
+        self.open_export_button.grid_remove()
         self._refresh_child_mode()
         self._refresh_cycle_label()
         generation = self.editor._gen
@@ -1008,6 +1020,8 @@ class AutomaticWorkspace:
                     self.progress.set(1)
                     self._append_log(f"Videos exportados: {event['path']}")
                     self.pipeline_title.configure(text="Cortes exportados")
+                    if event.get("trimmed"):
+                        self._offer_open_export(Path(event["path"]))
                 elif kind == "project_loaded":
                     if event.get("generation",self.editor._gen) != self.editor._gen:
                         continue
@@ -1038,10 +1052,15 @@ class AutomaticWorkspace:
                         continue
                     for warning in event["warnings"][:8]:
                         self._append_log(warning)
+                    pending = getattr(self, "_pending_child_master", None)
+                    self._pending_child_master = None
                     if len(event["candidates"]) == 1:
                         self._load_project(event["candidates"][0]["path"])
                     elif event["candidates"]:
                         self._choose_discovered(event["candidates"])
+                    elif pending and Path(pending).is_file():
+                        # «Abrir el video recortado» sin catálogo: el master que escribió la exportación
+                        self._load_project(str(pending))
                 elif kind == "ui_error":
                     cancelled = self.cancel.is_set()
                     self._set_processing(False)
@@ -1517,21 +1536,61 @@ class AutomaticWorkspace:
         output = dialogs.open_dir("Carpeta para los videos recortados", remember="podcast_exports")
         if not output:
             return
+        # las capas visibles del padre (temas, pedidos, capas de la AI) viajan al hijo
+        # remapeadas a su reloj; los recortes no (ya quedan aplicados)
+        layers = self.layers.store.visible() if self.layers.store else None
+        lane_order = list(self.layers.lane_order)
         self.progress.set(0)
         self.pipeline_title.configure(text="Cortando y exportando…")
         summary = editorial_trims.stats(trims)
         self._append_log(f"Cortando {summary['enabled']} recortes "
                          f"({format_time(summary['removed_seconds'])}) "
-                         + (f"en {len(plan['chunks'])} bloques…" if plan else "sobre el video completo…"))
+                         + (f"en {len(plan['chunks'])} bloques…" if plan else "sobre el video completo…")
+                         + (f" · {len(layers)} capa(s) viajan al hijo" if layers else ""))
 
         def work():
             with editorial_pipeline._RunLock(master.parent / ".work"):
                 destination = podcast_export.export_plan(
-                    master, plan, source, output, trims=trims, fmt=fmt, cancel=self.cancel,
+                    master, plan, source, output, trims=trims, fmt=fmt, layers=layers,
+                    lane_order=lane_order, cancel=self.cancel,
                     progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
                     log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
-            self.events.put({"tipo": "export_done", "path": str(destination)})
-        self._background(work)
+            self.events.put({"tipo": "export_done", "path": str(destination), "trimmed": True})
+        self._background(work, label="export:trims")
+
+    def _offer_open_export(self, destination: Path):
+        """Tras «Exportar con recortes»: si salió UN archivo, el botón «Abrir el video
+        recortado» lo importa como medio y carga su proyecto hijo (por huella; si el
+        descubrimiento no lo encuentra, por la ruta del master que escribió la exportación)."""
+        try:
+            manifest = read_json(Path(destination) / "exports.json")
+        except (OSError, ValueError):
+            return
+        files = [f for f in manifest.get("files") or [] if f.get("file")]
+        if len(files) != 1:
+            if len(files) > 1:
+                self._append_log(f"{len(files)} videos exportados: importa el que quieras seguir "
+                                 "editando (la app encuentra su proyecto hijo sola).")
+            return
+        video = Path(destination) / files[0]["file"]
+        child_master = Path(destination) / files[0]["project_master"] if files[0].get("project_master") else None
+        self._export_child = (video, child_master)
+        self.open_export_button.configure(text=f"Abrir el video recortado ({video.name})")
+        self.open_export_button.grid()
+        self._append_log("Pulsa «Abrir el video recortado» para seguir sobre el video corto: "
+                         "temas y capas ya vienen heredados.")
+
+    def _open_exported_child(self):
+        pending = getattr(self, "_export_child", None)
+        if not pending:
+            return
+        video, child_master = pending
+        if not video.is_file():
+            messagebox.showerror("No existe", f"No encuentro {video}")
+            return
+        self._pending_child_master = child_master
+        self.open_export_button.grid_remove()
+        self.editor.cargar(str(video))
 
     # ---- carriles: bloques (read-only) + recortes (interactivo) ----
     def _cut_lanes(self):

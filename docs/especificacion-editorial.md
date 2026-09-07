@@ -475,7 +475,11 @@ quitarían del video. Reglas vigentes:
    «pedido viejo» si se editan capas o recortes antes de que la AI responda.
 5. **Solo «Exportar con recortes» edita.** Cada bloque sale con los segmentos conservados
    concatenados (`trim`/`atrim` + `concat`), todas las pistas y sus offsets, precisión de
-   fotograma, sin deriva A/V; el original no se toca.
+   fotograma, sin deriva A/V; el original no se toca. Cada video exportado publica un
+   proyecto hijo con el master derivado (la misma metadata sin lo recortado, en el reloj
+   del hijo) y las capas del padre remapeadas (temas, pedidos, capas de la AI); los
+   recortes no viajan porque ya están aplicados. «Abrir el video recortado» carga ese
+   hijo para seguir el ciclo con la AI sobre el video corto.
 
 ## 11. Archivos esperados de la Fase 1
 

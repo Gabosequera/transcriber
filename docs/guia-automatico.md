@@ -261,6 +261,21 @@ transcripción y señales, en tiempos de su propio video. `derivation.segments`
 permite volver a cada tramo del padre, incluso con recortes. Analizar silencios
 extrae audio del hijo una vez para medir RMS; no ejecuta modelos de nuevo.
 
+**El hijo hereda las capas.** «Exportar con recortes» copia al proyecto hijo la capa
+«Temas y subtemas», tus capas de pedidos y las capas de la AI, con cada rango
+intersectado con lo que se conservó y trasladado al reloj del video corto: un tema que
+caía entero dentro de un recorte desaparece (y sus subtemas con él); uno que cruzaba un
+recorte queda en dos tramos contiguos; los `item_id` se conservan y cada item guarda
+`source_item_id` y cada tramo `source_range` para volver al padre. Estados y ediciones
+se conservan; el orden de carriles también. Los recortes (`trims.json`) no viajan: ya
+están aplicados. Las marcas del autor tampoco, por ahora.
+
+**Abrir el video recortado.** Al terminar «Exportar con recortes» con un solo archivo,
+aparece ese botón en la caja RECORTES: importa el video exportado y carga su proyecto
+hijo (por huella del contenido; si el catálogo aún no lo conoce, por la ruta que escribió
+la exportación). Es el paso natural antes de pedir a la AI temas, recortes profundos o el
+montaje por temas sobre el video corto.
+
 Importa cualquier padre o hijo: la app busca automáticamente su master por fingerprint
 en la carpeta del medio y el conjunto vecino, carga el plan y los recortes sin repetir
 análisis. Si hay metadata distinta para el mismo contenido, ofrece las versiones.

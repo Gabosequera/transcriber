@@ -128,14 +128,80 @@ def derive_master(parent, child_info, child_fp, segments, *, name, parent_path=N
                            "segments": mapping, "ancestor": copy.deepcopy(parent.get("derivation"))}}
 
 
-def publish_child(root, parent, media_path, segments, *, parent_path=None, final_media=None):
+def derive_layers(parent_layers, mapping, *, child_fingerprint, child_digest, parent_digest=None):
+    """Capas del padre (`layers/`: temas, pedidos, capas de la AI) remapeadas al reloj
+    del hijo (plan-montaje-ai.md §6): cada rango se intersecta con los segmentos
+    conservados y se traslada (`map_range`); un rango que cruza un recorte queda en
+    dos rangos contiguos; un item cuyos rangos desaparecen por completo no se copia,
+    ni sus descendientes. Los `item_id` y `layer_id` se conservan (identidad estable
+    entre padre e hijo); cada item lleva `source_item_id` y cada rango `source_range`.
+    Estados y `edited` se conservan. Puro."""
+    import editorial_trims
+    result = []
+    for layer in parent_layers or []:
+        if layer.get("deleted"):
+            continue
+        by_id = {i["item_id"]: i for i in layer.get("items") or []}
+        derived, dropped = {}, set()
+        for item in layer.get("items") or []:
+            ranges = []
+            for part in item.get("ranges") or []:
+                for hit in map_range(float(part["t_ini"]), float(part["t_fin"]), mapping):
+                    if hit["t_fin"] - hit["t_ini"] <= 0.0005:
+                        continue
+                    ranges.append({**{k: v for k, v in part.items() if k not in ("t_ini", "t_fin")},
+                                   "t_ini": hit["t_ini"], "t_fin": hit["t_fin"],
+                                   "source_range": [hit["source_ini"], hit["source_fin"]]})
+            if not ranges:
+                dropped.add(item["item_id"])
+                continue
+            ranges.sort(key=lambda r: (r["t_ini"], r["t_fin"]))
+            derived[item["item_id"]] = {**copy.deepcopy(item), "ranges": ranges,
+                                        "source_item_id": item["item_id"]}
+        # un item sin rangos arrastra a sus descendientes (no pueden quedar huérfanos)
+        changed = True
+        while changed:
+            changed = False
+            for identifier, item in list(derived.items()):
+                parent_id = item.get("parent_id")
+                if parent_id and (parent_id in dropped or parent_id not in derived):
+                    dropped.add(identifier)
+                    del derived[identifier]
+                    changed = True
+        items = [derived[i["item_id"]] for i in layer.get("items") or [] if i["item_id"] in derived]
+        child = {**copy.deepcopy(layer), "items": items, "revision": 0,
+                 "media_fingerprint": editorial_trims.identity(child_fingerprint),
+                 "source_master_digest": child_digest,
+                 "derived_from": {"source_master_digest": parent_digest,
+                                  "layer_revision": int(layer.get("revision", 0)),
+                                  "dropped_item_ids": sorted(dropped)}}
+        result.append(child)
+    return result
+
+
+def publish_child(root, parent, media_path, segments, *, parent_path=None, final_media=None,
+                  layers=None, lane_order=None):
+    """Publica el proyecto hijo: master derivado y, si se pasan, las capas del padre
+    remapeadas (`layers/<id>.json`) y el orden de carriles (`views/lanes.json`).
+    `trims.json` NO se propaga: los recortes ya están aplicados en el hijo."""
     info = medios.inspeccionar(media_path)
     fp = medios.fingerprint(media_path, info)
     master = derive_master(parent, info, fp, segments, name=Path(media_path).stem,
                            parent_path=parent_path)
     # No guardar localizadores efímeros del staging.
     master["media"]["path"] = str(final_media or media_path)
-    return editorial_master.write_package(root, master)["master"]
+    written = editorial_master.write_package(root, master)["master"]
+    if layers:
+        import editorial_layers
+        derived = derive_layers(layers, master["derivation"]["segments"], child_fingerprint=fp,
+                                child_digest=editorial_chunks.source_master_digest(master),
+                                parent_digest=master["derivation"]["source_master_digest"])
+        for layer in derived:
+            editorial_layers.validate_layer(layer, master)
+            atomic_write_json(Path(root) / "layers" / (layer["layer_id"] + ".json"), layer)
+        if lane_order:
+            editorial_layers.save_lane_order(root, lane_order)
+    return written
 
 
 def ensure_track_audio(master_path, source, *, cancel=None):

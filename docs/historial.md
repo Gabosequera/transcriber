@@ -715,3 +715,20 @@ pasada reemplaza únicamente los cortes de la AI de su carril. Cuatro tests nuev
 (pedido, import a carril propio conservando la primera pasada, rechazo de `lane:
 main`, archivo viejo sin el carril) y el smoke prepara el pedido profundo, importa
 una propuesta y comprueba el carril, el orden y la etiqueta de estado. 133 tests.
+
+## 2026-09-07 — El video recortado hereda temas y capas; «Abrir el video recortado» (0.3.8)
+
+Fase C del plan. Gabriel quería exportar con los recortes, volver a abrir el resultado
+y tener «el mismo JSON pero habiendo quitado la metadata que caía dentro de lo
+recortado». El master derivado ya existía (`publish_child`); faltaban las capas:
+`editorial_projects.derive_layers` remapea al reloj del hijo la capa de temas, las de
+pedidos y las de la AI con el mismo criterio que la metadata (`map_range`): un rango
+que cae entero en un recorte desaparece (y sus subtemas), uno que cruza un recorte
+queda en dos tramos contiguos, y cada item guarda `source_item_id` y cada tramo
+`source_range` para volver al padre; ids, estados y ediciones se conservan;
+`views/lanes.json` viaja también; `trims.json` y las marcas del autor no. «Exportar
+con recortes» pasa las capas visibles y, al terminar con un solo archivo, muestra
+«Abrir el video recortado» en la caja RECORTES: importa el video y carga su hijo (por
+huella o, si el catálogo aún no lo tiene, por la ruta del master exportado). Dos
+tests nuevos (remapeo puro con jerarquía y exportación real con `layers/` en el hijo)
+y el smoke pulsa el botón y comprueba los rangos heredados de la capa de temas.

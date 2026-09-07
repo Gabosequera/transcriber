@@ -580,6 +580,24 @@ intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
   `editorial_cycle` lee `mode: deep` del pedido y el nombre del carril del import; una
   propuesta solo cuenta para un pedido si es estrictamente posterior a él (`_after`).
   `tests/test_deep_trims.py` (4 tests) y bloque nuevo en el smoke.
+- **Fase C (hecha, 0.3.8)** — el hijo hereda temas y capas. `editorial_projects.
+  derive_layers(parent_layers, mapping, child_fingerprint, child_digest, parent_digest)`
+  (puro): por rango `map_range` → intersección con los segmentos conservados y
+  traslado (un rango que cruza un recorte queda en dos contiguos, `source_range`
+  por tramo), items sin rangos se omiten con sus descendientes
+  (`derived_from.dropped_item_ids`), `item_id`/`layer_id`/estado/`edited`/
+  `deleted_item_ids` se conservan, `media_fingerprint` y `source_master_digest` son
+  los del hijo, `revision` 0. `publish_child(..., layers=, lane_order=)` valida cada
+  capa contra el master del hijo y escribe `layers/<id>.json` + `views/lanes.json`;
+  `export_plan(..., layers=, lane_order=)` las entrega (Automático pasa
+  `store.visible()`). `trims.json` y el sidecar de marcas NO se propagan. UI: tras
+  «Exportar con recortes» con un solo archivo, `_offer_open_export` muestra «Abrir el
+  video recortado» en la caja RECORTES → `editor.cargar(video)` y el descubrimiento
+  por huella carga el hijo; sin candidatos, `_pending_child_master` carga el master
+  que escribió la exportación. Tests en `test_projects.py` (capa con rango dentro de
+  un recorte, rango que cruza, jerarquía, ffmpeg real: el hijo contiene `layers/` y
+  `lanes.json`); el smoke exporta con capas, pulsa el botón y comprueba los rangos
+  remapeados de la capa de temas.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

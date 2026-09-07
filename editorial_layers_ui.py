@@ -331,6 +331,10 @@ class LayersController:
             for layer in self.store.visible():
                 ui.extend(layers.split_by_depth(layer))      # temas/subtemas por profundidad (§9)
             self._cache = layers.order_layers(ui, self.lane_order)
+            # las coordenadas de carriles que ya no existen (otro proyecto, capa
+            # borrada) no deben confundir a la marquesina ni al arrastre
+            alive = {l["layer_id"] for l in self._cache}
+            self._lane_y = {k: v for k, v in self._lane_y.items() if k in alive}
             self._draw_indexes = {}
             for layer in self._cache:
                 entries=sorted(((r['t_ini'],r['t_fin'],item,index)
@@ -716,8 +720,9 @@ class LayersController:
         editor = self.w.editor
         y0, y1 = sorted((d["y0"], d.get("y1", d["y0"])))
         lanes = {}
+        known = {l["layer_id"] for l in self.all()}
         for lid, ly in self._lane_y.items():
-            if ly <= y1 and ly + 34 >= y0:
+            if lid in known and ly <= y1 and ly + 34 >= y0:
                 lanes[lid] = self._visible_parts_between(lid, d["t0"], d["t1"])
         if not lanes:
             lanes[d["lid"]] = self._visible_parts_between(d["lid"], d["t0"], d["t1"])

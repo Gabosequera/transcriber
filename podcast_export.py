@@ -144,14 +144,16 @@ def filter_script_option() -> str:
 
 
 def export_plan(master_path, document, source, output_dir, *, trims=None, fmt=DEFAULT_FORMAT,
-                cancel=None, progress_cb=None, log_cb=None):
+                layers=None, lane_order=None, cancel=None, progress_cb=None, log_cb=None):
     """Publica una carpeta completa; nunca sobrescribe el medio ni una exportación.
 
     `document` es el plan de bloques (None = todo el medio en un bloque, solo con
     recortes). `trims` es el documento de recortes revisado: se quitan las UNIONES de
     sus recortes activos dentro de cada bloque. `fmt` es una clave de FORMATS: los que
     recodifican cortan exacto; «copy» conserva el original y mueve los límites al
-    fotograma clave anterior (los hijos heredan los tiempos REALES del corte)."""
+    fotograma clave anterior (los hijos heredan los tiempos REALES del corte).
+    `layers` (capas visibles del padre) y `lane_order` viajan al proyecto hijo
+    remapeados a su reloj (plan §6)."""
     if fmt not in FORMATS:
         raise ValueError(f"Formato de salida desconocido: {fmt}")
     spec, copy_mode = FORMATS[fmt], fmt == "copy"
@@ -302,7 +304,7 @@ def export_plan(master_path, document, source, output_dir, *, trims=None, fmt=DE
             child_root = stage / "projects" / target.stem / "editorial"
             child = editorial_projects.publish_child(
                 child_root, master, target, kept, parent_path=Path(master_path).resolve(),
-                final_media=destination / filename)
+                final_media=destination / filename, layers=layers, lane_order=lane_order)
             results[-1]["project_master"] = child.relative_to(stage).as_posix()
             results[-1]["fingerprint"] = medios.fingerprint(target, actual)
         atomic_write_json(stage / "accepted-plan.json", plan)

@@ -139,15 +139,33 @@ def main():
             import editorial_trims, podcast_export
             trims=editorial_trims.new_document(data['media']['fingerprint'],12)
             editorial_trims.add_cut(trims,3,7)
-            exported=podcast_export.export_plan(project,None,source,root/('export-'+uuid.uuid4().hex[:8]),trims=trims)
+            # Fase C: las capas visibles del padre (la de temas, con rangos [0,.8] y [9.2,12])
+            # viajan al hijo remapeadas; «Abrir el video recortado» carga el hijo
+            parent_layers = workspace.layers.store.visible() if workspace.layers.store else None
+            exported=podcast_export.export_plan(project,None,source,root/('export-'+uuid.uuid4().hex[:8]),trims=trims,
+                                                layers=parent_layers, lane_order=list(workspace.layers.lane_order))
             entry=editorial_io.read_json(exported/'exports.json')['files'][0]
             child=exported/entry['file']
-            workspace.editor.cargar(str(child))
+            workspace.events.put({"tipo": "export_done", "path": str(exported), "trimmed": True})
+            spin(lambda: workspace.open_export_button.winfo_ismapped())
+            assert child.name in workspace.open_export_button.cget("text")
+            workspace._open_exported_child()
             spin(lambda:workspace.result and Path(workspace.result['master'])==exported/entry['project_master'])
             spin(lambda:workspace.layers.store is not None and workspace.layers.store.master.get('derivation'))
             child_data=workspace.layers.store.master
             assert child_data['tracks']['B']['words'][-1]['t_ini']==4
             assert all(w['text']!='eliminado' for t in child_data['tracks'].values() for w in t['words'])
+            if parent_layers:
+                inherited = next(l for l in workspace.layers.store.visible() if l['kind'] == 'topics')
+                spans = [(r['t_ini'], r['t_fin']) for r in inherited['items'][0]['ranges']]
+                import editorial_projects
+                source_topic = next(l for l in parent_layers if l['kind'] == 'topics')['items'][0]
+                expected = [(p['t_ini'], p['t_fin']) for r in source_topic['ranges']
+                            for p in editorial_projects.map_range(r['t_ini'], r['t_fin'], child_data['derivation']['segments'])]
+                assert spans == expected and spans[-1][1] == 8.0 and spans[-1][0] < 6.0, (spans, expected)
+                assert inherited['items'][0]['comment'] == 'Recurrencia revisada a mano'
+                assert inherited['derived_from']['source_master_digest']
+                assert not workspace.open_export_button.winfo_ismapped()
             app.update()
             # Fase A: en un hijo no se ven «Procesar pistas» ni «Exportar bloques»
             assert not workspace.run_button.winfo_ismapped() and not workspace.accept_button.winfo_ismapped()
@@ -496,6 +514,7 @@ def main():
             editorial_trims.add_cut(many, round(.5 + i * .06, 3), round(.56 + i * .06, 3), origin="silence")
         editorial_trims.save_document(trims_path, many); workspace.trims = many; workspace._reindex_trims()
         ed.refrescar_layout(); app.update()
+        controller.clear_selection("trims:main")      # Ctrl+A actúa sobre el carril bajo el último click
         controller.select_all()
         assert len(controller.selection) == 120
         t0 = time.perf_counter()
