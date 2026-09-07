@@ -189,6 +189,46 @@ def main():
             assert "Ctrl+Right" in app.keymap_settings._rows["nav.step_next"]["chord"].cget("text")
             keymap.reload(Path(tmp) / "no-existe.json")                               # defaults otra vez
         assert ed._key_toplevel(ev(ed.tl, "Left")) == "break" and ed.t_play == 0
+        # ---- navegación (Fase 3): fotograma, bordes por bisect, silencios, ir a tiempo, selección, vista
+        controller = workspace.layers
+        fps = workspace.info["video"]["fps"]
+        ed.ejecutar("nav.frame_next"); assert abs(ed.t_play - 1 / fps) < 1e-6, ed.t_play
+        ed.ejecutar("nav.frame_next_10"); assert abs(ed.t_play - 11 / fps) < 1e-6
+        ed.ejecutar("nav.frame_prev"); assert abs(ed.t_play - 10 / fps) < 1e-6
+        edges = controller.edges()
+        assert len(edges) >= 2, edges.times                      # bordes del recorte de silencio
+        ed._set_playhead(0)
+        cost = []
+        while True:
+            t0 = time.perf_counter()
+            before = ed.t_play
+            assert ed.ejecutar("nav.next_edge")
+            cost.append((time.perf_counter() - t0) * 1000)
+            if ed.t_play == before:
+                break
+            assert ed.t_play in edges.times or ed.t_play >= workspace.info["duracion"] - .05
+        assert max(cost) < 30, f"salto a borde {max(cost):.1f} ms"
+        ed.ejecutar("nav.prev_edge"); assert ed.t_play == edges.times[-2]
+        silences = controller.silences()
+        assert len(silences) >= 2
+        ed._set_playhead(0); ed.ejecutar("nav.next_silence"); assert ed.t_play == silences.times[0]
+        ed.ejecutar("nav.prev_silence"); assert ed.t_play == 0 or ed.t_play in silences.times
+        ed._ir_a_tiempo("+2"); assert abs(ed.t_play - 2) < 1e-6 or ed.t_play == silences.times[0] + 2
+        ed._ir_a_tiempo("0:03"); assert ed.t_play == 3
+        ed._ir_a_tiempo("nada"); assert ed.t_play == 3 and "inválido" in ed.lbl_status.cget("text")
+        cut = workspace.trims["cuts"][0]
+        controller.selected = ("recortes", cut["cut_id"], 0)
+        ed.ejecutar("nav.sel_end"); assert abs(ed.t_play - min(cut["t_fin"], workspace.info["duracion"] - .05)) < 1e-6
+        ed.ejecutar("nav.sel_start"); assert ed.t_play == cut["t_ini"]
+        ed.ejecutar("view.zoom_sel")
+        assert ed.view[0] <= cut["t_ini"] and ed.view[0] + ed.view[1] >= cut["t_fin"]
+        controller.selected = None
+        ed._fit(); ed._zoom(4); ed._set_playhead(workspace.info["duracion"] / 2); ed.ejecutar("view.center")
+        assert abs(ed.view[0] + ed.view[1] / 2 - ed.t_play) < 1e-6
+        assert ed._seguir; ed.ejecutar("view.follow"); assert not ed._seguir; ed.ejecutar("view.follow")
+        assert not workspace.skip_check.get(); ed.ejecutar("view.skip_trims")
+        assert workspace.skip_check.get(); ed.ejecutar("view.skip_trims"); assert not workspace.skip_check.get()
+        ed._fit()
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

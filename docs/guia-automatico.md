@@ -323,7 +323,17 @@ reconocen igual.
 | `L` / `J` | Más rápido ×1→×2→×3→×4→×8 (pausado: reproduce a ×1) / más lento (a ×1 pausa) |
 | `1` `2` `3` `4` | Velocidad exacta (arranca si estaba pausado) |
 | `Shift` + `L` | Skim a ×8: solo fotogramas clave, audio mudo |
+| `Shift` + Espacio | Reproducir desde el inicio del item seleccionado (o del IN) |
+| `,` / `.`, con `Shift` | ±1 fotograma / ±10 fotogramas (según la tasa del medio) |
+| `↑` / `↓` | Borde anterior / siguiente de cualquier carril (bloques, recortes, capas, marcas) |
+| `Ctrl` + `↑` / `↓` | Silencio anterior / siguiente (solo recortes de la heurística) |
+| `Ctrl` + `G` | Ir a tiempo: `1:23:45.6`, `5025`, `+30`, `-10` |
+| `Shift` + `I` / `O` | Inicio / fin del item seleccionado (o del IN/OUT) |
 | `+` / `−`, `Ctrl` + rueda | Zoom (la rueda centra en el cursor) |
+| `Z` | Zoom al item seleccionado (10 % de margen) |
+| `C` | Centrar el playhead |
+| `F` | Seguir al playhead durante la reproducción (sí/no) |
+| `Shift` + `T` | Saltar recortes al reproducir (el checkbox de RECORTES) |
 | Rueda, arrastre con botón central | Desplazarse |
 | `Shift` + `Z` | Ver todo |
 | `M`, `I`/`O`, `X`, `Supr` en el carril de marcas | Marcas del autor (ver la guía del modo Manual) |

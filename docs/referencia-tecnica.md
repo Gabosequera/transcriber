@@ -193,6 +193,15 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   `"break"` solo si se consumió. Click izquierdo en algo no interactivo del editor →
   `tl.focus_set()`. Ajustes → Atajos (`keymap_ui.KeymapSettings`): Grabar / × /
   Restaurar; guardar = `keymap.save()` + `reload()` y aplica al instante.
+- **Navegación** (Fase 3): `editorial_nav.py` puro — `EdgeIndex` (tiempos únicos
+  ordenados; `prev/next` = bisect, `nearest` = imán), `edge_times(layers)`,
+  `silence_times(trims)`, `parse_goto`, `frame_step`. `LayersController.edges()` y
+  `silences()` cachean el índice con la misma clave que `all()` (se reconstruye solo al
+  cambiar los documentos) y atienden `nav.*`, `view.zoom_sel`, `view.skip_trims` y
+  `transport.play_from_item` en `action()`; sin carriles, `EditorMedios` cae a las
+  marcas del Registro (`_indice_marcas`) y al IN/OUT. Paso de fotograma por
+  `_set_playhead` (caché exacta); `zoom_a`, `_centrar`, `_seguir` (F, solo afecta al
+  auto-scroll del tick). Medido en el smoke: salto a borde < 30 ms de hilo de UI.
 - **Apagado**: TODO pasa por `wizard._stop_preview()` (epoch de sesión `_preview_epoch`
   invalida callbacks tardíos; mata stream+prefetch+timers+audio). Lo llaman play/stop,
   cambio de video, nav fuera del paso 1 y cierre.
@@ -397,8 +406,9 @@ Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-ed
   de las teclas anteriores; las acciones de las fases 3–7 ya tienen id y acorde por
   defecto en `keymap.ACTIONS`, sin handler todavía (la tecla no hace nada hasta que
   llegue su fase).
-- **Pendientes:** Fase 3 navegación (fotograma, bordes, silencios, ir a tiempo, zoom a
-  selección), Fase 4 edición y deshacer (`editorial_history.py`, `accepted`), Fase 5
+- **Fase 3 (hecha)** — navegación: fotograma, bordes y silencios por bisect, ir a
+  tiempo, inicio/fin y zoom de la selección, seguir/centrar, saltar recortes.
+- **Pendientes:** Fase 4 edición y deshacer (`editorial_history.py`, `accepted`), Fase 5
   hwaccel opcional, Fase 6 selección múltiple y herramientas de mouse, Fase 7 carriles
   de la AI y lanes de `trims.json`.
 

@@ -375,9 +375,79 @@ class LayersController:
         editor.refrescar_layout()
         self.sync_detail()
 
+    # ---- navegación por los carriles (Fase 3): índices con bisect, cacheados ----
+    def edges(self):
+        """Índice de bordes de TODOS los carriles visibles, reconstruido solo cuando
+        cambian los documentos (misma clave que `all()`)."""
+        import editorial_nav
+        layers_ = self.all()
+        key = self._cache_key
+        if getattr(self, "_edges_key", None) != key:
+            self._edges_key = key
+            self._edges = editorial_nav.EdgeIndex(editorial_nav.edge_times(layers_))
+        return self._edges
+
+    def silences(self):
+        import editorial_nav
+        trims = self.w.trims
+        key = (id(trims), trims.get("revision") if trims else None,
+               len(trims["cuts"]) if trims else 0)
+        if getattr(self, "_silences_key", None) != key:
+            self._silences_key = key
+            self._silences = editorial_nav.EdgeIndex(editorial_nav.silence_times(trims))
+        return self._silences
+
+    def selected_range(self):
+        """[inicio, fin] del item seleccionado (todos sus tramos), o None."""
+        if not self.selected or not self.selected[1]:
+            return None
+        try:
+            _, item = self.find(*self.selected[:2])
+        except StopIteration:
+            return None
+        if not item:
+            return None
+        return (min(r["t_ini"] for r in item["ranges"]), max(r["t_fin"] for r in item["ranges"]))
+
+    def _jump(self, index, delta, what):
+        editor = self.w.editor
+        t = index.next(editor.t_play) if delta > 0 else index.prev(editor.t_play)
+        if t is None:
+            editor.status(f"no hay más {what} en esa dirección")
+        else:
+            editor._mover_playhead(t)
+        return True
+
     def action(self, action, _e=None):
-        """`acciones_extra` del editor: acciones del keymap sobre el item de capa
-        seleccionado (el dueño va primero). True si se consumió."""
+        """`acciones_extra` del editor: acciones del keymap que dependen de los
+        carriles (el dueño va primero). True si se consumió; False deja que el
+        editor use su propio fallback (marcas, IN/OUT)."""
+        if not self.store:
+            return False
+        editor = self.w.editor
+        if action in ("nav.prev_edge", "nav.next_edge"):
+            return self._jump(self.edges(), +1 if action.endswith("next_edge") else -1, "bordes")
+        if action in ("nav.prev_silence", "nav.next_silence"):
+            return self._jump(self.silences(), +1 if action.endswith("next_silence") else -1,
+                              "silencios")
+        if action == "view.skip_trims":
+            self.w.skip_check.toggle()
+            editor.status("Saltar recortes al reproducir: "
+                          + ("sí" if self.w.skip_check.get() else "no"))
+            return True
+        rango = self.selected_range()
+        if action in ("nav.sel_start", "nav.sel_end", "view.zoom_sel", "transport.play_from_item"):
+            if rango is None:
+                return False                   # el editor prueba con IN/OUT o la marca
+            if action == "nav.sel_start":
+                editor._mover_playhead(rango[0])
+            elif action == "nav.sel_end":
+                editor._mover_playhead(rango[1])
+            elif action == "view.zoom_sel":
+                editor.zoom_a(*rango)
+            else:
+                editor._play(reiniciar=True, desde=rango[0])
+            return True
         if not self.selected or not self.selected[1]:
             return False
         lid, iid, _ = self.selected

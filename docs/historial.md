@@ -541,3 +541,12 @@ reemplaza a `teclas_extra` (Automático migra sus cuatro acciones). Migración 1
 la app se comporta igual con el keymap por defecto. Smoke Tk: teclas con el foco
 en un Entry no disparan; en el timeline sí; un atajo cambiado aplica sin
 reiniciar. 93 tests.
+
+**Fase 3 — navegación.** `editorial_nav.py` puro: índice de bordes (`EdgeIndex`,
+bisect sobre tiempos únicos), bordes de todas las capas y de los silencios,
+`parse_goto`. `LayersController.edges()/silences()` cachean el índice con la
+clave de `all()`; el editor cae a las marcas e IN/OUT cuando no hay carriles.
+Acciones: `,` `.` fotograma (±10 con Shift), `↑` `↓` bordes, `Ctrl+↑/↓` silencios,
+`Ctrl+G` ir a tiempo, `Shift+I/O` inicio/fin de la selección, `Z` zoom a la
+selección, `C` centrar, `F` seguir, `Shift+T` saltar recortes, `Shift+Espacio`
+play desde el item. Medido en el smoke: salto a borde < 30 ms de UI. 97 tests.

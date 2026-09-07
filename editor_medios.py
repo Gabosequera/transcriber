@@ -92,6 +92,7 @@ class EditorMedios:
         self.t_play = 0.0                      # el PLAYHEAD: un solo tiempo para audio+video
         self.rate = 1.0                        # velocidad de reproducción (SPEEDS)
         self._rate_after = None                # debounce del cambio de velocidad
+        self._seguir = True                    # auto-scroll durante la reproducción (F)
         self._envs: dict[int, list] = {}       # envolventes GLOBALES por pista (fit)
         self._ancla = (0.0, 0.0)               # (t, reloj) del último play
         self._ph = None                        # item del playhead en el canvas del timeline
@@ -686,6 +687,88 @@ class EditorMedios:
             self.view = [0.0, self.info["duracion"]]
             self._dibujar_timeline()
 
+    def zoom_a(self, a, b, margen=0.1):
+        """Zoom a un rango [a, b] con `margen` (10 %) a cada lado (acción Z)."""
+        if not self.info:
+            return
+        a, b = sorted((float(a), float(b)))
+        largo = max(b - a, SPAN_MIN / (1 + 2 * margen))
+        self.view = [a - largo * margen, largo * (1 + 2 * margen)]
+        self._clamp_view()
+        self._dibujar_timeline()
+
+    def _centrar(self):
+        """Centra el playhead en el viewport (acción C) sin cambiar el zoom."""
+        if not self.info:
+            return
+        self.view[0] = self.t_play - self.view[1] / 2
+        self._clamp_view()
+        self._dibujar_timeline()
+
+    def _toggle_seguir(self):
+        """Seguir al playhead (F): alterna el auto-scroll por saltos de página durante
+        la reproducción; la navegación manual siempre mantiene el playhead a la vista."""
+        self._seguir = not self._seguir
+        self.status("Seguir al playhead: " + ("sí" if self._seguir else "no"))
+
+    def _paso_fotograma(self, n: int):
+        """±n fotogramas (1/fps del medio) por `_set_playhead` (caché exacta)."""
+        import editorial_nav
+        fps = (self.info.get("video") or {}).get("fps") if self.info else None
+        self._mover_playhead(self.t_play + n * editorial_nav.frame_step(fps))
+
+    def _ir_a_tiempo(self, texto=None):
+        """Ctrl+G: diálogo «1:23:45.6», «5025», «+30», «-10» (o `texto` directo)."""
+        import editorial_nav
+        if texto is None:
+            dialog = ctk.CTkInputDialog(text="Ir a tiempo: 1:23:45.6 · 5025 · +30 · -10",
+                                        title="Ir a tiempo")
+            texto = dialog.get_input()
+            self.tl.focus_set()
+        if texto is None:
+            return
+        try:
+            t = editorial_nav.parse_goto(texto, self.t_play, self.info["duracion"])
+        except ValueError as error:
+            self.status(f"⚠ {error}")
+            return
+        self._mover_playhead(t)
+
+    # ---- bordes de las marcas (fallback cuando el dueño no tiene carriles) ----
+    def _indice_marcas(self):
+        import editorial_nav
+        reg = self.reg
+        key = (id(reg), reg.revision if reg else None, len(reg.marcas) if reg else 0)
+        if getattr(self, "_marcas_idx_key", None) != key:
+            times = []
+            for m in (reg.marcas if reg else []):
+                if m["tipo"] == "punto":
+                    times.append(m["t"])
+                else:
+                    times.extend((m["t_ini"], m["t_fin"]))
+            self._marcas_idx_key = key
+            self._marcas_idx = editorial_nav.EdgeIndex(times)
+        return self._marcas_idx
+
+    def _saltar_borde(self, delta: int):
+        idx = self._indice_marcas()
+        t = idx.next(self.t_play) if delta > 0 else idx.prev(self.t_play)
+        if t is None:
+            self.status("no hay más bordes en esa dirección")
+            return
+        self._mover_playhead(t)
+
+    def _rango_seleccion(self):
+        """[a, b] de la marca seleccionada (región), del IN pendiente, o None."""
+        m = self.sel_marca
+        if m is not None and m["tipo"] == "region":
+            return m["t_ini"], m["t_fin"]
+        if m is not None:
+            return m["t"], m["t"]
+        if self._pend_in is not None:
+            return self._pend_in, self.t_play
+        return None
+
     def _asegurar_visible(self, t) -> bool:
         """Auto-scroll por SALTOS de página (no re-render continuo — consenso q.6):
         corre la vista solo cuando el playhead se acerca al borde. True si movió."""
@@ -1005,6 +1088,27 @@ class EditorMedios:
             self.rate = min(SPEEDS, key=lambda s: abs(s - float(rate)))
             self._play()
 
+    def _ir_a_seleccion(self, extremo: int):
+        rango = self._rango_seleccion()
+        if rango is None:
+            self.status("no hay selección ni IN pendiente")
+            return
+        self._mover_playhead(rango[extremo])
+
+    def _zoom_seleccion(self):
+        rango = self._rango_seleccion()
+        if rango is None:
+            self.status("no hay selección ni IN pendiente")
+            return
+        self.zoom_a(*rango)
+
+    def _play_desde_seleccion(self):
+        rango = self._rango_seleccion()
+        if rango is None:
+            self.status("no hay selección ni IN pendiente")
+            return
+        self._play(reiniciar=True, desde=min(rango))
+
     def _marca_in(self):
         self._pend_in = self.t_play
         self.status(f"◀ IN marcado en {self.t_play:.1f}s — «O» en el out cierra la región.")
@@ -1028,6 +1132,20 @@ class EditorMedios:
             "view.zoom_in": lambda: self._zoom(1.5),
             "view.zoom_out": lambda: self._zoom(1 / 1.5),
             "view.fit": self._fit,
+            # ---- navegación (Fase 3); el dueño con carriles atiende antes ----
+            "nav.frame_prev": lambda: self._paso_fotograma(-1),
+            "nav.frame_next": lambda: self._paso_fotograma(+1),
+            "nav.frame_prev_10": lambda: self._paso_fotograma(-10),
+            "nav.frame_next_10": lambda: self._paso_fotograma(+10),
+            "nav.prev_edge": lambda: self._saltar_borde(-1),
+            "nav.next_edge": lambda: self._saltar_borde(+1),
+            "nav.goto": self._ir_a_tiempo,
+            "nav.sel_start": lambda: self._ir_a_seleccion(0),
+            "nav.sel_end": lambda: self._ir_a_seleccion(1),
+            "view.zoom_sel": self._zoom_seleccion,
+            "view.follow": self._toggle_seguir,
+            "view.center": self._centrar,
+            "transport.play_from_item": self._play_desde_seleccion,
             "marks.point": self._marca_punto,
             "marks.in": self._marca_in,
             "marks.out": self._marca_out,
@@ -1591,7 +1709,7 @@ class EditorMedios:
         self.lbl_t.configure(text=self._texto_reloj())
         if self.on_playhead:
             self.on_playhead(self.t_play)
-        if self._asegurar_visible(self.t_play):
+        if self._seguir and self._asegurar_visible(self.t_play):
             self._dibujar_timeline()           # salto de página del viewport
         else:
             self._mover_linea_playhead()
