@@ -301,6 +301,33 @@ class Registro:
             self.guardar()
         self.notificar()
 
+    def reemplazar(self, marcas: list[dict]) -> int:
+        """Reemplaza la LISTA COMPLETA de marcas (deshacer/rehacer y operaciones en
+        lote): revalida, guarda y notifica como cualquier edición. Conserva la
+        identidad de objeto de las marcas que siguen existiendo (la UI tiene refs) y
+        `next_id` nunca retrocede. Devuelve cuántas quedaron."""
+        import copy as _copy
+        nuevas, cuarentena = _validar_lista(_copy.deepcopy(list(marcas or [])), self.dur)
+        if cuarentena:
+            raise ValueError(f"marca inválida: {cuarentena[0]['motivo']}")
+        with self._transaccion():
+            vivas = {m["id"]: m for m in self.marcas}
+            lista = []
+            for m in nuevas:
+                viva = vivas.get(m["id"])
+                if viva is not None:
+                    viva.clear(); viva.update(m)
+                    lista.append(viva)
+                else:
+                    lista.append(m)
+            self.marcas[:] = lista
+            usados = [int(m["id"][1:]) for m in self.marcas if _RE_ID.match(str(m.get("id", "")))]
+            if usados:
+                self.next_id = max(self.next_id, max(usados) + 1)
+            self.guardar()
+        self.notificar()
+        return len(self.marcas)
+
     def reasociar_previa(self) -> tuple[int, int] | None:
         """(entrarían, en_cuarentena) si se reasociara el sidecar ajeno — para que la
         UI muestre el conteo ANTES de confirmar (consenso r2 q.1). El segundo número es

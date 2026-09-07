@@ -202,6 +202,27 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   marcas del Registro (`_indice_marcas`) y al IN/OUT. Paso de fotograma por
   `_set_playhead` (caché exacta); `zoom_a`, `_centrar`, `_seguir` (F, solo afecta al
   auto-scroll del tick). Medido en el smoke: salto a borde < 30 ms de hilo de UI.
+- **Edición y deshacer** (Fase 4): `editorial_edits.py` puro (dividir/recortar/empujar
+  rangos, `split_layer_item`, `split_cut`, `split_chunk`, `next_item`, `toggle_accept`,
+  `batch_accept/toggle`) y `editorial_history.py` puro (`HistoryStack`: pila de
+  operaciones, profundidad 50, `record/undo/redo/settle`, `Stale`). En
+  `LayersController`: `transact(label, doc_ids, fn)` toma snapshots antes/después de
+  los documentos (`autor` = lista de marcas, `trims`, `plan`, `layer:<id>`) y registra;
+  `persist` (único punto de escritura de items, ahora con `label`), `split`,
+  `trim_edge`, `nudge`, `step_item`, `accept` y el diálogo de capas pasan por ahí;
+  las marcas que escribe el editor (M, I/O, X, prompt, arrastre) entran por el hook
+  `editor.transaccion`. Las importaciones (silencios, propuesta de recortes, bloques,
+  capas, temas pasada 2) registran en el hilo de UI con el `before` tomado antes del
+  worker. `undo()/redo()` restauran POR LOS CAMINOS DE GUARDADO (`Registro.reemplazar`,
+  `save_document`, `apply_plan`, `store.save`; una capa creada se deshace con la tumba
+  `deleted: true` y un borrado con `deleted: false`), reseleccionan si el item sigue
+  existiendo y dicen «Deshecho: …» en el status. La «revisión» que valida una entrada
+  es el digest del CONTENIDO sin `revision`/`updated_at` (un número de revisión
+  invalidaría la entrada N−1 al deshacer la N); si el contenido cambió por fuera, la
+  entrada se descarta con aviso. `accepted` es un campo aditivo de cada corte
+  (`_normalize_cut`, `add_cut`, `apply_silence_analysis` lo conservan; el adaptador
+  lo muestra como ACEPTADO con borde verde; la exportación sigue mirando solo
+  `enabled`; `trim-review.md` lo expone como «aceptado por el editor»).
 - **Apagado**: TODO pasa por `wizard._stop_preview()` (epoch de sesión `_preview_epoch`
   invalida callbacks tardíos; mata stream+prefetch+timers+audio). Lo llaman play/stop,
   cambio de video, nav fuera del paso 1 y cierre.
@@ -344,6 +365,10 @@ Diseñada con Codex (5 rondas → READY) e implementada con review de 4 rondas �
   dicen a ×2–×4); a ×1 la línea de ffmpeg es EXACTAMENTE la de siempre (sin filtro).
   `AudioClock.position()` sigue devolviendo None con muestra vieja (> 0,5 s de pared).
   El cambio de velocidad es una re-sesión con debounce, sin hilos ni timers nuevos.
+- **Todo cambio escrito desde el timeline queda en el historial**: si añades un punto
+  de escritura, envuélvelo en `LayersController.transact` (o registra en el hilo de UI
+  con el `before` tomado antes del worker) y prueba su undo/redo. Restaurar siempre por
+  los caminos de guardado, nunca escribiendo archivos a mano.
 - **Teclas**: ningún `bind_all`; un solo `<Key>` en el toplevel con guarda de foco
   (jamás despachar con el foco en un Entry/Text) y solo el editor activo. Toda tecla
   se resuelve por `keymap.current()` (lookup O(1)); las acciones se identifican por id
@@ -408,7 +433,10 @@ Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-ed
   llegue su fase).
 - **Fase 3 (hecha)** — navegación: fotograma, bordes y silencios por bisect, ir a
   tiempo, inicio/fin y zoom de la selección, seguir/centrar, saltar recortes.
-- **Pendientes:** Fase 4 edición y deshacer (`editorial_history.py`, `accepted`), Fase 5
+- **Fase 4 (hecha)** — edición sobre el item seleccionado (dividir, recortar
+  inicio/fin, empujar, item anterior/siguiente, aceptar y aceptar-y-seguir) y
+  deshacer/rehacer de todo lo que escribe el timeline, incluidas las importaciones.
+- **Pendientes:** Fase 5
   hwaccel opcional, Fase 6 selección múltiple y herramientas de mouse, Fase 7 carriles
   de la AI y lanes de `trims.json`.
 

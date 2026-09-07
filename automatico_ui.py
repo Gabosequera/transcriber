@@ -1,6 +1,7 @@
 """Workspace Automático funcional para la Fase 1 editorial."""
 from __future__ import annotations
 
+import copy
 import queue
 import threading
 import time
@@ -17,7 +18,7 @@ import editorial_trims
 import hardware
 import podcast_export
 import medios
-from editorial_io import format_time, parse_time, read_json
+from editorial_io import digest_json, format_time, parse_time, read_json
 from editor_medios import EditorMedios, LANE_H
 
 
@@ -305,6 +306,9 @@ class AutomaticWorkspace:
                                    on_playhead=self._on_playhead,
                                    acciones_extra=self.layers.action, marcas_en_capas=True)
         self.editor.f.grid(row=0, column=0, sticky="nsew")
+        # las marcas que escribe el editor (M, I/O, X, prompt, arrastre) entran al
+        # historial de deshacer del proyecto (diseño §4)
+        self.editor.transaccion = self.layers.transact
         # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
         # en la fila libre del editor (entre el timeline y el status) — nada de
         # escribirlo en el status, cuyo wrap movía timeline y preview con cada hover
@@ -803,9 +807,14 @@ class AutomaticWorkspace:
                 elif kind == "review_ready":
                     self._background_done()
                     self.review_dialog = ChunkReviewDialog(self.f, event["path"],
-                        on_saved=self._load_saved_plan, master=event["master"], document=self.plan)
+                        on_saved=self._plan_reviewed, master=event["master"], document=self.plan)
                 elif kind == "plan_loaded":
+                    plan_before = event.get("plan_before")
                     self.plan = event["plan"]
+                    if event.get("history"):   # importar una propuesta se puede deshacer
+                        self.layers.history.record(event["history"], {"plan": plan_before},
+                                                   {"plan": self.plan},
+                                                   {"plan": self.layers._doc_revision("plan")})
                     self._review_stale = bool(self.trims and self.trims["cuts"])
                     self.editor.refrescar_layout()
                     self._background_done()
@@ -816,14 +825,18 @@ class AutomaticWorkspace:
                 elif kind == "layers_loaded":
                     if str(self._master_path()) == event["master"]:
                         self.layers.store = event["store"]
+                        self.layers.history.clear()          # historial por medio cargado
                         self.editor.refrescar_layout()
                 elif kind == "layers_imported":
                     self._background_done()
+                    self._record_layers(event.get("before") or {}, "importar propuesta de capa")
                     self.layers.snapshot()
                     self.editor.refrescar_layout()
                     self._append_log("Propuesta de capa importada; revisa sus tramos en el timeline.")
                 elif kind == "topics_imported":
                     self._background_done()
+                    if event.get("pass") == 2:
+                        self._record_layers(event.get("before") or {}, "importar temas de la AI")
                     self.editor.refrescar_layout()
                     self._append_log(event["message"])
                 elif kind == "review_written":
@@ -987,12 +1000,23 @@ class AutomaticWorkspace:
     def _import_plan(self, path, *, reuse_proposal=False):
         master = self._master_path()
         if master:
+            plan_before = copy.deepcopy(self.plan)
             self.plan = None
             self.editor.refrescar_layout()
             def work():
                 plan = editorial_pipeline.apply_agent_chunks(master, path, reuse_proposal=reuse_proposal)
-                self.events.put({"tipo": "plan_loaded", "plan": plan})
+                self.events.put({"tipo": "plan_loaded", "plan": plan, "history": "importar bloques",
+                                 "plan_before": plan_before})
             self._background(work)
+
+    def _plan_reviewed(self):
+        """«Revisar chunks» guardó el plan: recargarlo y registrarlo en el historial."""
+        before = copy.deepcopy(self.plan)
+        self._load_saved_plan()
+        after = self.plan
+        if after is not None and before != after:
+            self.layers.history.record("revisar bloques", {"plan": before}, {"plan": after},
+                                       {"plan": self.layers._doc_revision("plan")})
 
     def _load_saved_plan(self):
         master = self._master_path()
@@ -1096,11 +1120,25 @@ class AutomaticWorkspace:
                 self.events.put({"tipo": "log", "message": f"Recortes: {error}"})
         threading.Thread(target=work, daemon=True, name="trims-load").start()
 
+    def _record_layers(self, before: dict, label: str):
+        """Registra en el historial las capas que una importación (worker) tocó:
+        `before` = snapshots tomados en el hilo de UI antes de lanzar el trabajo."""
+        controller = self.layers
+        if not controller.store or not before:
+            return
+        after = {doc: controller._doc_snapshot(doc) for doc in before}
+        controller.history.record(label, before, after,
+                                  {doc: controller._doc_revision(doc) for doc in before})
+
     def _on_trims_loaded(self, event: dict):
         master = self._master_path()
         if not master or event.get("master") != str(master):
             return                             # llegó tarde: ya se abrió otro proyecto
+        trims_before = event.get("trims_before")
         self.trims = event["doc"]
+        if event.get("history") and trims_before is not None:
+            self.layers.history.record(event["history"], {"trims": trims_before}, {"trims": self.trims},
+                                       {"trims": self.layers._doc_revision("trims")})
         self.trims_path = Path(event["path"])
         if event.get("index") is not None:
             self._boundary_index = event["index"]
@@ -1200,6 +1238,7 @@ class AutomaticWorkspace:
                 data, audio_paths=audio, params=params, cancel=self.cancel,
                 progress_cb=lambda fraction: self.events.put({"tipo": "overall", "fraction": fraction}),
                 log_cb=lambda message: self.events.put({"tipo": "log", "message": message}))
+            trims_before = copy.deepcopy(document)
             editorial_trims.apply_silence_analysis(document, analysis)
             editorial_trims.save_document(path, document)
             editorial_trims.write_review_package(master.parent, data, plan, document)
@@ -1207,6 +1246,7 @@ class AutomaticWorkspace:
             summary = analysis["stats"]
             self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(path),
                              "doc": document, "index": index, "quiet": False, "review_stale": False,
+                             "history": "analizar silencios", "trims_before": trims_before,
                              "message": (f"Silencios: {summary['cuts']} recortes propuestos, "
                                          f"{summary['enabled']} activos. Nada se cortó: revisa el "
                                          "carril «recortes» y ajusta con el mouse.")})
@@ -1221,12 +1261,16 @@ class AutomaticWorkspace:
 
         def work():
             data = read_json(master)
+            trims_before = editorial_trims.load_document(
+                trims_path, fingerprint=data["media"].get("fingerprint"),
+                duration=float(data["media"]["duration"]))
             document, proposal = editorial_trims.import_proposal(
                 trims_path, path, data, plan, fingerprint=data["media"].get("fingerprint"))
             index = editorial_trims.BoundaryIndex(data)
             flagged = sum(1 for cut in proposal["cuts"] if cut["warnings"])
             self.events.put({"tipo": "trims_loaded", "master": str(master), "path": str(trims_path),
                              "doc": document, "index": index, "quiet": False,
+                             "history": "importar recortes de la AI", "trims_before": trims_before,
                              "message": (f"Propuesta de la AI ({proposal['planner']}): "
                                          f"{len(proposal['cuts'])} recortes de contenido"
                                          + (f", {flagged} con avisos" if flagged else "")
@@ -1293,9 +1337,14 @@ class AutomaticWorkspace:
             return
         import editorial_layers
         snapshot = self.layers.snapshot()
+        proposal = read_json(path)
+        ids = [layer.get("layer_id") for layer in
+               ([proposal.get("layer")] if proposal.get("layer") else []) + list(proposal.get("layers") or [])
+               if isinstance(layer, dict) and layer.get("layer_id")]
+        before = {f"layer:{identifier}": self.layers._doc_snapshot(f"layer:{identifier}") for identifier in ids}
         def work():
-            editorial_layers.merge_response(self.layers.store, read_json(path), snapshot)
-            self.events.put({"tipo": "layers_imported"})
+            editorial_layers.merge_response(self.layers.store, proposal, snapshot)
+            self.events.put({"tipo": "layers_imported", "before": before})
         self._background(work)
 
     def _prepare_topics(self):
@@ -1320,9 +1369,16 @@ class AutomaticWorkspace:
         import editorial_topics
         snapshot = self.layers.snapshot()
         store = self.layers.store
+        before = {}
+        try:
+            request = read_json(store.root / "views" / "topics-request.json")
+            doc = "layer:" + (request.get("layer_id") or "")
+            before = {doc: self.layers._doc_snapshot(doc)} if request.get("layer_id") else {}
+        except (OSError, ValueError):
+            pass
         def work():
             result = editorial_topics.import_proposal(store, read_json(path), snapshot)
-            self.events.put({"tipo":"topics_imported", **result})
+            self.events.put({"tipo":"topics_imported", "before": before, **result})
         self._background(work)
 
     def _on_playhead(self, t: float):

@@ -195,9 +195,18 @@ def adapters(master, *, plan=None, trims=None, marks=None):
             ranges=[dict(t_ini=c["t_ini"], t_fin=c["t_fin"])]) for c in plan["chunks"]])
     if trims is not None:
         layer("recortes", "Recortes", "#728bd0", [dict(item_id=c["cut_id"], label=c["cut_id"],
-            comment=c["reason"], state="proposed" if c["enabled"] else "disabled", edited=c["edited"],
+            comment=c["reason"], state=cut_state(c), edited=c["edited"],
             origin=c["origin"], ranges=[dict(t_ini=c["t_ini"], t_fin=c["t_fin"])]) for c in trims["cuts"]])
     return result
+
+
+def cut_state(cut: dict) -> str:
+    """Estado de UI de un recorte (§3.1): desactivado si no está `enabled`; aceptado si
+    lleva la marca de revisión humana `accepted`; si no, propuesto. La exportación
+    sigue mirando solo `enabled`."""
+    if not cut.get("enabled", True):
+        return "disabled"
+    return "accepted" if cut.get("accepted") else "proposed"
 
 
 def write_snapshot(root, master, layers, *, master_digest=None):

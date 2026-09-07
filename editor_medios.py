@@ -80,6 +80,9 @@ class EditorMedios:
         self.on_video_cargado = on_video_cargado
         self.on_playhead = on_playhead
         self.acciones_extra = acciones_extra
+        # hook de historial del dueño: transaccion(label, [doc_ids], fn) → fn() registrado
+        # en su pila de deshacer (diseño §4). Sin dueño con historial, fn() a secas.
+        self.transaccion = None
         self._drag_extra = None                # (gesto, y0) del carril extra que capturó B1
 
         self.q: queue.Queue = queue.Queue()
@@ -922,7 +925,7 @@ class EditorMedios:
             g = self._tl_geo()
             px = abs(d["t1"] - d["t0"]) * (g[1] / max(self.view[1], 1e-9)) if g else 0
             if d["movio"] and px >= 4:         # ≥4 px = región; menos = click (deselección)
-                m = self.reg.agregar_region(d["t0"], d["t1"])
+                m = self._tx("crear marca", lambda: self.reg.agregar_region(d["t0"], d["t1"]))
                 self._seleccionar(m, foco_prompt=True)
             self._dibujar_timeline()
             return
@@ -935,7 +938,19 @@ class EditorMedios:
                 m["t_fin"] = round(min(self.info["duracion"],
                                        m["t_ini"] + marcas_mod.MIN_REGION_DECISION), 3)
             try:
-                self.reg.editar(m)             # sin campos: valida el estado y guarda
+                # sin campos: valida el estado y guarda (el drag mutó la marca en vivo;
+                # el snapshot «antes» del historial sale del sidecar ya guardado, así
+                # que se toma de la copia pre-drag)
+                orig_snapshot = d["base"][0]
+                def commit():
+                    self.reg.editar(m)
+                if self.transaccion is not None:
+                    vivo = dict(m)
+                    m.clear(); m.update(orig_snapshot)      # «antes» real para el historial
+                    def commit():
+                        m.clear(); m.update(vivo)
+                        self.reg.editar(m)
+                self._tx("mover marca", commit)
             except ValueError as err:
                 # ROLLBACK al estado pre-drag (review impl h.2): el editar() de marcas.py
                 # no puede revertir porque el objeto YA venía mutado por el drag — sin
@@ -1509,10 +1524,17 @@ class EditorMedios:
         if foco_prompt:
             self.e_prompt.focus_set()
 
+    def _tx(self, label, fn):
+        """Escritura de marcas desde el editor: pasa por el historial del dueño si lo
+        hay (Automático), si no ejecuta directo (wizard, Marcar)."""
+        if self.transaccion is not None:
+            return self.transaccion(label, ["autor"], fn)
+        return fn()
+
     def _marca_punto(self):
         if self.reg is None:
             return
-        m = self.reg.agregar_punto(self.t_play)
+        m = self._tx("marca puntual", lambda: self.reg.agregar_punto(self.t_play))
         self._seleccionar(m, foco_prompt=True)
         self._dibujar_timeline()
 
@@ -1524,7 +1546,7 @@ class EditorMedios:
         if abs(t1 - t0) < 0.05:
             self.status("⚠ IN y OUT casi iguales — región descartada.")
         else:
-            m = self.reg.agregar_region(t0, t1)
+            m = self._tx("región IN/OUT", lambda: self.reg.agregar_region(t0, t1))
             self._seleccionar(m, foco_prompt=True)
         self._dibujar_timeline()
 
@@ -1551,12 +1573,14 @@ class EditorMedios:
         self._aplicar_decision(m, nueva)
 
     def _aplicar_decision(self, m, decision):
-        if m["tipo"] == "punto" and decision is not None:
-            self.reg.a_region(m, radio=RADIO_PUNTO)
-            self.status(f"○→▭ {m['id']} pasó a región [{m['t_ini']:.1f}–{m['t_fin']:.1f}s] "
-                        f"(una decisión de corte exige región — ajustá los bordes).")
-        try:
+        def do():
+            if m["tipo"] == "punto" and decision is not None:
+                self.reg.a_region(m, radio=RADIO_PUNTO)
+                self.status(f"○→▭ {m['id']} pasó a región [{m['t_ini']:.1f}–{m['t_fin']:.1f}s] "
+                            f"(una decisión de corte exige región — ajustá los bordes).")
             self.reg.editar(m, decision=decision)
+        try:
+            self._tx("decisión de la marca", do)
         except ValueError as err:
             self.status(f"⚠ {err}")
             return
@@ -1573,14 +1597,15 @@ class EditorMedios:
             return
         txt = self.e_prompt.get().strip() or None
         if txt != self.sel_marca.get("prompt"):
-            self.reg.editar(self.sel_marca, prompt=txt)
+            m = self.sel_marca
+            self._tx("prompt de la marca", lambda: self.reg.editar(m, prompt=txt))
             self._dibujar_timeline()
 
     def _marca_borrar(self):
         m = self.sel_marca or self._marca_bajo_playhead()
         if m is None or self.reg is None:
             return
-        self.reg.borrar(m)
+        self._tx("borrar marca", lambda: self.reg.borrar(m))
         self._seleccionar(None)
         self._dibujar_timeline()
 

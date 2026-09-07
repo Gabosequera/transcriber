@@ -339,6 +339,20 @@ reconocen igual.
 | `M`, `I`/`O`, `X`, `Supr` en el carril de marcas | Marcas del autor (ver la guía del modo Manual) |
 | Carril «recortes» | Ver la tabla de §3 |
 
+Edición sobre el item seleccionado (todo se guarda al momento y se puede deshacer):
+
+| Tecla | Acción |
+|---|---|
+| `S` | Dividir en el playhead (recortes: dos cortes; bloques: nuevo límite ajustado; marcas: dos regiones; capas: dos items) |
+| `[` / `]` | Recortar el inicio / el fin del tramo al playhead |
+| `Alt` + `←` / `→`, con `Shift` | Empujar ±1 / ±10 fotogramas (el playhead sigue al item) |
+| `Tab` / `Shift` + `Tab` | Item siguiente / anterior del carril (el playhead va a su inicio) |
+| `A` | Aceptar / quitar aceptación (un recorte aceptado lleva borde verde; la exportación no cambia) |
+| `Shift` + `A` | Aceptar y pasar al siguiente: revisar una lista de silencios sin soltar el teclado |
+| `X` | Activar / desactivar |
+| `Supr`, `Enter`/`F2`, `Esc` | Borrar, editar, deseleccionar |
+| `Ctrl` + `Z` / `Ctrl` + `R` (o `Ctrl` + `Shift` + `Z`, `Ctrl` + `Y`) | Deshacer / rehacer cualquier cambio del timeline: items, pedidos, marcas, capas, análisis de silencios e importaciones de la AI. Si un archivo cambió por fuera (la AI escribió mientras tanto) esa entrada se descarta con aviso en vez de pisar. Dentro de un campo de texto, `Ctrl+Z` deshace solo el texto |
+
 **Velocidad.** Hasta ×4 se oye lo que dicen, solo más rápido y con el tono conservado
 (el mismo estiramiento que hace DaVinci), para juzgar un recorte sin bajar la
 velocidad; a ×8 el audio va mudo. El reloj muestra «0:12.3 ×2». Cambiar de velocidad

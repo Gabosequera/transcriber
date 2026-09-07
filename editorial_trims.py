@@ -93,6 +93,7 @@ def _normalize_cut(cut: dict, duration: float, index: int) -> dict:
     return {
         **cut, "cut_id": cut_id, "t_ini": round(start, 3), "t_fin": round(min(end, duration), 3),
         "origin": origin, "enabled": bool(cut.get("enabled", True)),
+        "accepted": bool(cut.get("accepted", False)),   # marca de revisión humana (§3.1)
         "edited": bool(cut.get("edited", False)),
         "reason": str(cut.get("reason") or ""), "confidence": confidence,
         "chunk_id": (str(cut["chunk_id"]) if cut.get("chunk_id") else None),
@@ -161,13 +162,14 @@ def save_document(path: str | Path, document: dict) -> Path:
 def _new_cut(document: dict, t_ini: float, t_fin: float, *, origin: str, reason: str = "",
              confidence: float | None = None, enabled: bool = True, chunk_id: str | None = None,
              evidence: dict | None = None, warnings: list[str] | None = None,
-             edited: bool = False) -> dict:
+             edited: bool = False, accepted: bool = False) -> dict:
     duration = float(document["duration"])
     start, end = sorted((max(0.0, float(t_ini)), min(duration, float(t_fin))))
     if end - start < MIN_CUT_SECONDS:
         raise ValueError(f"un recorte debe durar al menos {MIN_CUT_SECONDS:.2f} s")
     cut = {"cut_id": f"cut-{int(document['next_id']):06d}", "t_ini": round(start, 3),
            "t_fin": round(end, 3), "origin": origin, "enabled": bool(enabled),
+           "accepted": bool(accepted),
            "edited": bool(edited), "reason": reason or "", "confidence": confidence,
            "chunk_id": chunk_id, "evidence": evidence or {}, "warnings": list(warnings or []),
            "created_at": _now()}
@@ -519,6 +521,7 @@ def apply_silence_analysis(document: dict, analysis: dict) -> dict:
         if old is not None:
             cut["cut_id"] = old["cut_id"]
             cut["enabled"] = bool(old["enabled"])
+            cut["accepted"] = bool(old.get("accepted", False))   # la revisión humana sobrevive
             cut["created_at"] = old.get("created_at", cut["created_at"])
             document["next_id"] -= 1
         added.append(cut)
@@ -673,8 +676,9 @@ def review_blocks(master: dict, plan: dict | None) -> list[dict]:
 def _cut_marker(cut: dict) -> str:
     origin = {"silence": "silencio", "ai": "AI", "user": "usuario"}[cut["origin"]]
     seconds = cut["t_fin"] - cut["t_ini"]
-    return (f"⟂ RECORTE `{cut['cut_id']}` · {origin} · {format_time(cut['t_ini'])}–"
-            f"{format_time(cut['t_fin'])} ({seconds:.1f} s)")
+    return (f"⟂ RECORTE `{cut['cut_id']}` · {origin}"
+            + (" · aceptado por el editor" if cut.get("accepted") else "")
+            + f" · {format_time(cut['t_ini'])}–{format_time(cut['t_fin'])} ({seconds:.1f} s)")
 
 
 def review_markdown(master: dict, block: dict, document: dict | None) -> str:

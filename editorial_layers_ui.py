@@ -9,9 +9,11 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 import editorial_chunks
+import editorial_edits as edits
+import editorial_history
 import editorial_layers as layers
 import editorial_trims
-from editorial_io import parse_time, format_time
+from editorial_io import digest_json, parse_time, format_time
 
 
 def _font(size, **options):
@@ -149,6 +151,135 @@ class LayersController:
         self._cache_key = None
         self._cache = []
         self._draw_indexes = {}
+        # deshacer/rehacer (diseño §4): pila de operaciones por medio cargado
+        self.history = editorial_history.HistoryStack()
+
+    # ---- documentos: snapshot / revisión / restauración (diseño §4) ----
+    # doc_id ∈ {"autor", "trims", "plan", "layer:<id>"} (Fase 7 añade "lanes").
+    def _doc_snapshot(self, doc):
+        w = self.w
+        if doc == "autor":
+            reg = w.editor.reg
+            return copy.deepcopy(reg.marcas) if reg is not None else None
+        if doc == "trims":
+            return copy.deepcopy(w.trims)
+        if doc == "plan":
+            return copy.deepcopy(w.plan)
+        if doc.startswith("layer:"):
+            layer = self.store.layers.get(doc[6:]) if self.store else None
+            return copy.deepcopy(layer)
+        raise ValueError(f"documento desconocido: {doc}")
+
+    def _doc_revision(self, doc):
+        """«Revisión» que el historial compara para detectar cambios por fuera: el
+        digest del CONTENIDO del documento sin sus campos volátiles (`revision`,
+        `updated_at`). Un número de revisión no sirve: deshacer la entrada N sube la
+        revisión y dejaría inválida a la N−1, cuyo `after` es el mismo contenido."""
+        snapshot = self._doc_snapshot(doc)
+        if snapshot is None:
+            return None
+        if isinstance(snapshot, dict):
+            snapshot = {k: v for k, v in snapshot.items()
+                        if k not in ("revision", "updated_at") and not (k == "deleted" and not v)}
+        return digest_json(snapshot)
+
+    def _doc_restore(self, doc, snapshot):
+        """Restaura un documento POR SU CAMINO DE GUARDADO (nunca escribiendo archivos
+        a mano): la revisión sube y las protecciones siguen valiendo."""
+        w = self.w
+        if doc == "autor":
+            w.editor.reg.reemplazar(snapshot or [])
+        elif doc == "trims":
+            if snapshot is None:
+                raise ValueError("los recortes no existían")
+            document = copy.deepcopy(snapshot)
+            editorial_trims.save_document(w.trims_path, document)
+            w.trims = document
+            w._review_stale = True
+            w._reindex_trims()
+            w._refresh_trims_status()
+        elif doc == "plan":
+            if snapshot is None:
+                raise ValueError("el plan no existía; su importación no se deshace")
+            plan = editorial_chunks.apply_plan(self.store.root, w._master_path(),
+                                               copy.deepcopy(snapshot), persist_selection=True)
+            w.plan = plan
+        elif doc.startswith("layer:"):
+            identifier = doc[6:]
+            current = self.store.layers.get(identifier)
+            if snapshot is None:               # la capa no existía: tumba persistente
+                if current is not None:
+                    self.store.save({**current, "deleted": True})
+                return
+            value = copy.deepcopy(snapshot)
+            if current is not None and current.get("deleted") and not value.get("deleted"):
+                value["deleted"] = False       # deshacer un borrado: la tumba se levanta
+            if current is not None:            # la revisión nunca retrocede
+                value["revision"] = max(int(value.get("revision", 0)), int(current.get("revision", 0)))
+            self.store.save(value)
+        else:
+            raise ValueError(f"documento desconocido: {doc}")
+
+    def transact(self, label, doc_ids, fn):
+        """Ejecuta `fn()` (que escribe por los caminos de siempre) y registra la
+        operación en el historial con los snapshots de antes y después de los
+        documentos `doc_ids`. Si `fn` falla no se registra nada."""
+        doc_ids = list(dict.fromkeys(doc_ids))
+        before = {doc: self._doc_snapshot(doc) for doc in doc_ids}
+        result = fn()
+        after = {doc: self._doc_snapshot(doc) for doc in doc_ids}
+        self.history.record(label, before, after, {doc: self._doc_revision(doc) for doc in doc_ids})
+        return result
+
+    def _lane_doc(self, lid):
+        return {"autor": "autor", "recortes": "trims", "bloques": "plan"}.get(lid, f"layer:{lid}")
+
+    def _after_write(self):
+        """Tras escribir o restaurar: la selección solo sobrevive si el item existe."""
+        if self.selected and self.selected[1]:
+            try:
+                _, item = self.find(*self.selected[:2])
+            except StopIteration:
+                item = None
+            if item is None:
+                self.selected = None
+        self.snapshot()
+        self.w._refresh_plan_buttons()
+        self.w.editor.refrescar_layout()
+        self.sync_detail()
+
+    def undo(self, *, redo=False):
+        """Ctrl+Z / Ctrl+R: restaura `before` (o `after`) por los caminos de guardado.
+        Si un documento cambió por fuera, la entrada se descarta con aviso."""
+        editor = self.w.editor
+        if self.w.worker and self.w.worker.is_alive():
+            editor.status("espera a que termine la operación del proyecto")
+            return True
+        stack = self.history
+        entry = stack.peek_redo() if redo else stack.peek_undo()
+        verb = "rehacer" if redo else "deshacer"
+        if entry is None:
+            editor.status(f"nada que {verb}")
+            return True
+        revisions = {doc: self._doc_revision(doc) for doc in entry.docs}
+        try:
+            entry = stack.redo(revisions) if redo else stack.undo(revisions)
+        except editorial_history.Stale as error:
+            editor.status(f"⚠ no se puede {verb} {error}; la entrada se descarta")
+            return True
+        snapshots = entry.after if redo else entry.before
+        try:
+            for doc, snapshot in snapshots.items():
+                self._doc_restore(doc, snapshot)
+        except Exception as error:
+            stack.discard(entry)
+            self._after_write()
+            editor.status(f"✗ no se pudo {verb} «{entry.label}»: {error}")
+            return True
+        stack.settle(entry, {doc: self._doc_revision(doc) for doc in entry.docs})
+        self._after_write()
+        editor.status(("Rehecho: " if redo else "Deshecho: ") + entry.label)
+        return True
 
     def all(self):
         if not self.store:
@@ -213,9 +344,11 @@ class LayersController:
                     if key in occupied:
                         continue
                     occupied.add(key)
+                accepted = item["state"] == "accepted"
                 canvas.create_rectangle(a, y + 12, b, y + 31,
                     fill=color if item["state"] != "disabled" else "",
-                    outline="#ffffff" if selected else color, width=2 if selected else 1,
+                    outline="#ffffff" if selected else "#35a978" if accepted else color,
+                    width=2 if selected or accepted else 1,
                     dash=(3, 2) if item["state"] == "disabled" else ())
                 if b - a > 45:
                     canvas.create_text(a + 4, y + 21, anchor="w", fill="#ffffff",
@@ -283,9 +416,10 @@ class LayersController:
                         part["t_fin"] += delta
                     else:
                         part["t_ini" if mode == "start" else "t_fin"] = drag["now"]
-                    self.persist(lid, item)
+                    self.persist(lid, item, label="mover item" if mode == "move" else "estirar item")
                 else:
-                    self.persist(lid, layers.new_item(min(drag["t"], drag["now"]), max(drag["t"], drag["now"])), create=True)
+                    self.persist(lid, layers.new_item(min(drag["t"], drag["now"]), max(drag["t"], drag["now"])),
+                                 create=True, label="crear item")
                     self.edit_dialog()
             except Exception as error:
                 messagebox.showerror("No se guardó el rango", str(error), parent=self.w.f)
@@ -293,10 +427,18 @@ class LayersController:
             return True
         return True
 
-    def persist(self, lid, item, *, create=False, delete=False):
-        # Trabajar sobre copias; el guardado fallido no modifica los documentos vivos.
+    def persist(self, lid, item, *, create=False, delete=False, label=None):
+        """ÚNICO punto de escritura de un item (crear/editar/borrar) con las
+        validaciones de siempre; registra la operación en el historial (§4)."""
         if self.w.worker and self.w.worker.is_alive():
             raise ValueError("espera a que termine la operación del proyecto")
+        if label is None:
+            label = ("crear" if create else "borrar" if delete else "editar") + " item"
+        return self.transact(label, [self._lane_doc(lid)],
+                             lambda: self._persist(lid, item, create=create, delete=delete))
+
+    def _persist(self, lid, item, *, create=False, delete=False):
+        # Trabajar sobre copias; el guardado fallido no modifica los documentos vivos.
         editor = self.w.editor
         layers.validate_items([dict(item, parent_id=None)], self.store.master["media"]["duration"], allow_points=lid=="autor")
         item = copy.deepcopy(item)
@@ -333,7 +475,8 @@ class LayersController:
                 if create:
                     cut = editorial_trims.add_cut(document, part["t_ini"], part["t_fin"])
                     item["item_id"] = cut["cut_id"]
-                cut.update(**part, reason=item["comment"], enabled=item["state"] != "disabled", edited=True)
+                cut.update(**part, reason=item["comment"], enabled=item["state"] != "disabled",
+                           accepted=item["state"] == "accepted", edited=True)
             editorial_trims.save_document(self.w.trims_path, document)
             self.w.trims = document
             self.w._review_stale = True
@@ -370,10 +513,121 @@ class LayersController:
                 layer["items"] = [item if i["item_id"] == item["item_id"] else i for i in layer["items"]]
             self.store.save(layer)
         self.selected = None if delete else (lid, item["item_id"], 0)
-        self.snapshot()
-        self.w._refresh_plan_buttons()
-        editor.refrescar_layout()
+        self._after_write()
+        return item
+
+    # ---- acciones de edición sobre el item seleccionado (diseño §3, Fase 4) ----
+    def _selected_item(self):
+        if not self.selected or not self.selected[1]:
+            raise ValueError("selecciona un item del timeline")
+        lid, iid, segment = self.selected
+        layer, item = self.find(lid, iid)
+        if item is None:
+            raise ValueError("el item ya no existe")
+        return lid, layer, item, segment
+
+    def split(self):
+        """S: divide el tramo del item seleccionado en el playhead (recortes: dos
+        cortes; bloques: nuevo límite validado; marcas: dos regiones; capas: dos items)."""
+        lid, layer, item, segment = self._selected_item()
+        t = self.w.editor.t_play
+        doc = self._lane_doc(lid)
+
+        def do():
+            if lid == "recortes":
+                document, twin = edits.split_cut(self.w.trims, item["item_id"], t)
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._review_stale = True
+                self.w._reindex_trims()
+                self.w._refresh_trims_status()
+                return twin["cut_id"]
+            if lid == "bloques":
+                plan, twin = edits.split_chunk(self.w.plan, item["item_id"], t)
+                plan = editorial_chunks.snap_plan_to_safe_boundaries(plan, self.store.master)
+                editorial_chunks.apply_plan(self.store.root, self.w._master_path(), plan,
+                                            persist_selection=True)
+                self.w.plan = plan
+                return twin["chunk_id"]
+            if lid == "autor":
+                reg = self.w.editor.reg
+                mark = next((m for m in reg.marcas if m["id"] == item["item_id"]), None)
+                if mark is None or mark["tipo"] != "region":
+                    raise ValueError("solo se divide una región")
+                left, right = edits.split_range(mark, t)
+                reg.editar(mark, t_fin=left["t_fin"])
+                twin = reg.agregar_region(right["t_ini"], right["t_fin"], decision=mark.get("decision"),
+                                          prompt=mark.get("prompt"))
+                if mark.get("label"):
+                    reg.editar(twin, label=mark["label"])
+                return twin["id"]
+            layer_doc, twin = edits.split_layer_item(self.store.layers[lid], item["item_id"], t,
+                                                     segment=segment)
+            layers.validate_items(layer_doc["items"], self.store.master["media"]["duration"])
+            self.store.save(layer_doc)
+            return twin["item_id"]
+        new_id = self.transact("dividir item", [doc], do)
+        self.selected = (lid, new_id, 0)
+        self._after_write()
+        self.w.editor.status("dividido en el playhead")
+        return True
+
+    def trim_edge(self, edge):
+        """[ / ]: lleva el inicio o el fin del tramo seleccionado al playhead."""
+        lid, layer, item, segment = self._selected_item()
+        t = self.w.editor.t_play
+        index = edits.range_at(item["ranges"], t, preferred=segment)
+        if index is None:
+            index = segment if 0 <= segment < len(item["ranges"]) else 0
+        item["ranges"][index] = edits.trim_range(item["ranges"][index], edge, t)
+        self.persist(lid, item, label="recortar " + ("inicio" if edge == "start" else "fin"))
+        self.selected = (lid, item["item_id"], index)
         self.sync_detail()
+        return True
+
+    def nudge(self, frames):
+        """Alt+←/→: empuja el item ±n fotogramas; el playhead lo sigue."""
+        import editorial_nav
+        lid, layer, item, segment = self._selected_item()
+        fps = (self.w.info.get("video") or {}).get("fps") if self.w.info else None
+        delta = frames * editorial_nav.frame_step(fps)
+        item["ranges"] = edits.shift_ranges(item["ranges"], delta, self.store.master["media"]["duration"])
+        self.persist(lid, item, label=f"empujar {abs(frames)} fotograma(s)")
+        self.selected = (lid, item["item_id"], segment)
+        self.w.editor._mover_playhead(item["ranges"][min(segment, len(item["ranges"]) - 1)]["t_ini"])
+        return True
+
+    def step_item(self, direction):
+        """Tab / Shift+Tab: item anterior/siguiente dentro del carril seleccionado
+        (o el carril bajo el último click); el playhead va a su inicio."""
+        lid = self.selected[0] if self.selected else None
+        if lid is None:
+            lid = next((l["layer_id"] for l in self.all() if l["items"]), None)
+        if lid is None:
+            raise ValueError("no hay items en los carriles")
+        layer, _ = self.find(lid)
+        current = self.selected[1] if self.selected and self.selected[0] == lid else None
+        item = edits.next_item(layer["items"], current, direction)
+        if item is None:
+            self.w.editor.status("no hay más items en el carril")
+            return True
+        self.selected = (lid, item["item_id"], 0)
+        self.w.editor._mover_playhead(min(r["t_ini"] for r in item["ranges"]))
+        self.w.editor.redibujar()
+        self.sync_detail()
+        return True
+
+    def accept(self, *, then_next=False):
+        """A: proposed/disabled → accepted; accepted → proposed (§3.1). Shift+A pasa
+        al siguiente item del carril después."""
+        lid, layer, item, segment = self._selected_item()
+        if lid == "bloques":
+            raise ValueError("los bloques no tienen aceptación")
+        item["state"] = edits.toggle_accept(item["state"])
+        self.persist(lid, item, label="aceptar" if item["state"] == "accepted" else "quitar aceptación")
+        if then_next:
+            self.step_item(+1)
+        return True
 
     # ---- navegación por los carriles (Fase 3): índices con bisect, cacheados ----
     def edges(self):
@@ -425,6 +679,27 @@ class LayersController:
         if not self.store:
             return False
         editor = self.w.editor
+        if action == "edit.undo":
+            return self.undo()
+        if action == "edit.redo":
+            return self.undo(redo=True)
+        editing = {"edit.split": self.split,
+                   "edit.trim_start": lambda: self.trim_edge("start"),
+                   "edit.trim_end": lambda: self.trim_edge("end"),
+                   "edit.nudge_prev": lambda: self.nudge(-1),
+                   "edit.nudge_next": lambda: self.nudge(+1),
+                   "edit.nudge_prev_10": lambda: self.nudge(-10),
+                   "edit.nudge_next_10": lambda: self.nudge(+10),
+                   "edit.item_prev": lambda: self.step_item(-1),
+                   "edit.item_next": lambda: self.step_item(+1),
+                   "edit.accept": self.accept,
+                   "edit.accept_next": lambda: self.accept(then_next=True)}
+        if action in editing:
+            try:
+                return editing[action]()
+            except Exception as error:
+                editor.status(f"⚠ {error}")
+                return True
         if action in ("nav.prev_edge", "nav.next_edge"):
             return self._jump(self.edges(), +1 if action.endswith("next_edge") else -1, "bordes")
         if action in ("nav.prev_silence", "nav.next_silence"):
@@ -459,7 +734,8 @@ class LayersController:
                 self.persist(lid, item, delete=True)
             elif action == "edit.toggle":
                 item["state"] = "proposed" if item["state"] == "disabled" else "disabled"
-                self.persist(lid, item)
+                self.persist(lid, item, label="desactivar item" if item["state"] == "disabled"
+                             else "activar item")
             elif action == "edit.edit":
                 self.edit_dialog()
             elif action == "edit.deselect":
@@ -576,7 +852,7 @@ class LayersController:
                 for line in ranges.get("1.0", "end-1c").splitlines():
                     a, b = line.replace("–", "-").split("-")
                     updated["ranges"].append(dict(t_ini=parse_time(a), t_fin=parse_time(b)))
-                self.persist(lid, updated)
+                self.persist(lid, updated, label="editar pedido")
                 win.destroy()
             except Exception as error:
                 messagebox.showerror("No se guardó", str(error), parent=win)
@@ -615,12 +891,14 @@ class LayersController:
                     layer = current[listing.curselection()[0]]
                     if layer["kind"] not in ("user", "topics"):
                         raise ValueError("capa del proyecto: sus items se editan en el timeline")
+                doc = "layer:" + layer["layer_id"]
                 if mode == "delete":
-                    self.store.delete(layer["layer_id"])
+                    self.transact("borrar capa", [doc], lambda: self.store.delete(layer["layer_id"]))
                     self.selected = None
                 else:
                     layer.update(name=name.get().strip() or layer["name"], color=color.get().strip())
-                    self.store.save(layer)
+                    self.transact("crear capa" if mode == "new" else "renombrar capa", [doc],
+                                  lambda: self.store.save(layer))
                 self.snapshot()
                 refresh()
             except Exception as error:

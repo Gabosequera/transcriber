@@ -229,6 +229,94 @@ def main():
         assert not workspace.skip_check.get(); ed.ejecutar("view.skip_trims")
         assert workspace.skip_check.get(); ed.ejecutar("view.skip_trims"); assert not workspace.skip_check.get()
         ed._fit()
+        # ---- edición y deshacer (Fase 4): S, [, ], Alt+→, A, Shift+A, pedido, marcas, Ctrl+Z ×n, Ctrl+R ×n
+        import editorial_trims
+        history = controller.history
+        history.clear()
+        store = controller.store
+        trims_path = workspace.trims_path
+        def cuts():
+            return [(c["t_ini"], c["t_fin"], c["accepted"], c["enabled"]) for c in workspace.trims["cuts"]]
+        def cuts_on_disk():
+            return [(c["t_ini"], c["t_fin"], c["accepted"], c["enabled"])
+                    for c in editorial_io.read_json(trims_path)["cuts"]]
+        base = cuts()
+        nueva = layers.new_layer(store.master, "Pedidos deshacer")
+        controller.transact("crear capa", ["layer:" + nueva["layer_id"]], lambda: store.save(nueva))
+        assert nueva["layer_id"] in store.layers and len(history) == 1
+        ed._set_playhead(1)
+        controller.persist("recortes", layers.new_item(1, 3, comment="corte smoke"), create=True)
+        assert controller.selected[0] == "recortes" and len(history) == 2
+        ed._set_playhead(2); assert ed.ejecutar("edit.split")
+        assert (1.0, 2.0, False, True) in cuts() and (2.0, 3.0, False, True) in cuts()
+        assert controller.selected[1] != workspace.trims["cuts"][0]["cut_id"]
+        ed._set_playhead(2.5); assert ed.ejecutar("edit.trim_start")
+        ed._set_playhead(2.8); assert ed.ejecutar("edit.trim_end")
+        assert (2.5, 2.8, False, True) in cuts(), cuts()
+        assert ed.ejecutar("edit.nudge_next")
+        step = round(1 / fps, 3)
+        assert (round(2.5 + step, 3), round(2.8 + step, 3), False, True) in cuts(), cuts()
+        assert abs(ed.t_play - (2.5 + step)) < 1e-6
+        assert ed.ejecutar("edit.accept")
+        moved = next(c for c in workspace.trims["cuts"] if c["accepted"])
+        assert moved["enabled"] and cuts_on_disk() == cuts()
+        assert editorial_trims.enabled_intervals(workspace.trims) == editorial_trims.enabled_intervals(
+            editorial_io.read_json(trims_path))
+        before_next = controller.selected
+        assert ed.ejecutar("edit.accept_next")
+        moved = next(c for c in workspace.trims["cuts"] if c["cut_id"] == moved["cut_id"])
+        assert not moved["accepted"] and controller.selected != before_next
+        n_ops = len(history)
+        item = layers.new_item(0.5, 1.5, comment="")
+        controller.persist(nueva["layer_id"], item, create=True)
+        item = controller.find(nueva["layer_id"], item["item_id"])[1]
+        item["comment"] = "Busca el contexto"
+        controller.persist(nueva["layer_id"], item, label="editar pedido")       # = cerrar el diálogo
+        assert store.layers[nueva["layer_id"]]["items"][0]["comment"] == "Busca el contexto"
+        marcas_antes = len(ed.reg.marcas)
+        ed._set_playhead(4); assert ed._key_toplevel(ev(ed.tl, "m")) == "break"
+        assert len(ed.reg.marcas) == marcas_antes + 1 and len(history) == n_ops + 3
+        ed.e_prompt.delete(0, "end"); ed.e_prompt.insert(0, "pedido de la marca"); ed._marca_prompt()
+        assert ed.reg.marcas[-1]["prompt"] == "pedido de la marca" and len(history) == n_ops + 4
+        ed.tl.focus_set()
+        snapshot_docs = (cuts(), __import__("copy").deepcopy(store.layers[nueva["layer_id"]]["items"]),
+                         __import__("copy").deepcopy(ed.reg.marcas))
+        ctrl = keymap.STATE_CONTROL
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and ed.reg.marcas[-1].get("prompt") is None
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and len(ed.reg.marcas) == marcas_antes
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert store.layers[nueva["layer_id"]]["items"][0]["comment"] == ""
+        assert "Deshecho" in ed.lbl_status.cget("text")
+        for _ in range(3):
+            assert ed._key_toplevel(ev(ed.tl, "r", ctrl)) == "break"
+        assert (cuts(), store.layers[nueva["layer_id"]]["items"], ed.reg.marcas) == snapshot_docs
+        assert "Rehecho" in ed.lbl_status.cget("text")
+        # Ctrl+Z con el foco en un Entry es el deshacer del propio campo, no del proyecto
+        depth = len(history)
+        assert ed._key_toplevel(ev(campo, "z", ctrl)) is None and len(history) == depth
+        # deshacer TODO hasta la base: los recortes vuelven a los del análisis y la capa a la tumba
+        while history.can_undo():
+            assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert cuts() == base and cuts_on_disk() == base, (cuts(), base)
+        assert store.layers[nueva["layer_id"]].get("deleted") is True
+        assert not any(l["layer_id"] == nueva["layer_id"] for l in controller.all())
+        while history.can_redo():
+            assert ed._key_toplevel(ev(ed.tl, "r", ctrl)) == "break"
+        assert not store.layers[nueva["layer_id"]].get("deleted")            # la tumba se levantó
+        assert (cuts(), store.layers[nueva["layer_id"]]["items"], ed.reg.marcas) == snapshot_docs
+        # un documento cambiado por fuera descarta la entrada en vez de pisar
+        external = __import__("copy").deepcopy(workspace.trims)
+        editorial_trims.add_cut(external, 0.2, 0.4)
+        editorial_trims.save_document(trims_path, external)
+        workspace.trims = external
+        while history.peek_undo() and "trims" not in history.peek_undo().docs:
+            assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"      # las de otros documentos siguen valiendo
+        top_label = history.peek_undo().label
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert "descarta" in ed.lbl_status.cget("text"), ed.lbl_status.cget("text")
+        assert history.peek_undo() is None or history.peek_undo().label != top_label
+        assert any(c["t_ini"] == 0.2 for c in workspace.trims["cuts"])           # no se pisó
+        controller.selected = None
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

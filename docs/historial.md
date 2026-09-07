@@ -550,3 +550,20 @@ Acciones: `,` `.` fotograma (±10 con Shift), `↑` `↓` bordes, `Ctrl+↑/↓`
 `Ctrl+G` ir a tiempo, `Shift+I/O` inicio/fin de la selección, `Z` zoom a la
 selección, `C` centrar, `F` seguir, `Shift+T` saltar recortes, `Shift+Espacio`
 play desde el item. Medido en el smoke: salto a borde < 30 ms de UI. 97 tests.
+
+**Fase 4 — edición y deshacer.** `editorial_edits.py` (dividir, recortar,
+empujar, item siguiente, aceptar en lote) y `editorial_history.py` (pila de
+operaciones con snapshots por documento, profundidad 50, rama de redo
+descartada, `Stale`). `LayersController.transact` envuelve todo punto de
+escritura (`persist` con etiqueta, dividir, recortar, empujar, aceptar, diálogo
+de capas, importaciones registradas en el hilo de UI) y las marcas del editor
+entran por `editor.transaccion`; `undo/redo` restauran por los caminos de
+guardado (`Registro.reemplazar` nuevo, `save_document`, `apply_plan`,
+`store.save` con tumba/levantamiento). La validez de una entrada se comprueba
+por digest de contenido sin campos volátiles (un número de revisión invalidaba
+la N−1 al deshacer la N). `accepted` aditivo en `trims.json` (borde verde,
+conservado por el análisis de silencios, expuesto en `trim-review.md`; la
+exportación sigue con `enabled`). Smoke Tk: S, [, ], Alt+→, A, Shift+A, pedido,
+marca y prompt, Ctrl+Z ×3, Ctrl+R ×3, deshacer todo hasta la tumba y rehacer
+todo, Ctrl+Z en un Entry no toca el proyecto, cambio externo → entrada
+descartada sin pisar. 106 tests.
