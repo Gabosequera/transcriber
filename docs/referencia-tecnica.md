@@ -645,6 +645,34 @@ intercalados, propuesta, bucle con junction cards); F EDL/FCPXML para Resolve.
   preview con salto de tramo, Ctrl+Z/R, split, X, Tab, revelar; `--screenshot`).
   Pendiente conocido: el preview acepta ~1 s por junta (re-sesión); el proxy
   pre-renderizado queda como mejora.
+- **Fase E (hecha, 0.4.0)** — Tarea 5 «Montaje por temas». En `editorial_montaje`:
+  `prepare(root, master, snapshot, document, target_seconds, tolerance, min/max_clip,
+  topics_layer)` escribe `montaje-request.json` (`editorial-montage-request/1`:
+  `request_id`, digests de master/capas/montaje, `pass_required` = pasada actual + 1,
+  límites), `montaje-agent-request.md` (`request_markdown`), `montaje-transcript.md`
+  (`montage_transcript`: intervenciones con IDs + encabezados `## ▶ Tema/Subtema: …
+  (id)` y `## ◀ fin`, ordenados por tiempo), `montaje-signals.md` (`signals_markdown`:
+  picos de risa > 2 s con conf ≥ 0,9 y arousal z > 1,5 + niveles por intervención) y,
+  con clips, `montaje-current.md` (`current_markdown` + `junction_cards`: últimas/
+  primeras 12 palabras, salto firmado, temas a cada lado, borde dentro de palabra o
+  risa, pregunta sin respuesta). `validate_proposal` (`editorial-montage-proposal/1`):
+  identidad y digests incluido `montage_digest` = `content_digest` del montaje vivo,
+  `pass` = `pass_required`, clips no vacíos, `keep` → clip existente, bordes ajustados
+  con `snap_boundary`, IDs de intervención, límites de clip (avisos), tramos fuente
+  repetidos solo con `repeat` + motivo, total fuera de tolerancia = aviso global.
+  `merge_proposal`: protegidos = `origin != ai` o `edited` o `accepted` (se quedan
+  donde están), los demás de la AI se van, `keep` de un clip no protegido lo reubica,
+  los nuevos van a `V1` en orden saltando los tramos ocupados por protegidos;
+  `analysis` guarda `request_id`, `pass`, `title`, `sections`, `notes`,
+  `ai_clip_ids`. `import_proposal` persiste, escribe `montaje-pass<n>.json`, sube
+  `pass_required`, actualiza `montage_digest` y regenera `current`/`agent-request`.
+  UI: opción «Montaje por temas» (`_prepare_montage`, campo de minutos en la caja
+  MONTAJE persistido como `montage_target_minutes`), sondeo de `montaje.proposed.json`
+  → `_import_montage` (historial «importar montaje de la AI» con `before` del doc
+  `montaje`), `Importar JSON` enruta por schema; `editorial_cycle` ya conocía los
+  estados. `SKILL.md`: Tarea 5 completa (§8.3 del plan). Tests `TaskFiveTests` (3) y
+  bloque del smoke (pedido → propuesta con `keep` + clip nuevo → import protegido →
+  Ctrl+Z/R).
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

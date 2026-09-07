@@ -65,6 +65,8 @@ _DEFAULTS = {
     "automatico_panel_width": 292,
     # formato de salida al exportar cortes (clave de podcast_export.FORMATS)
     "export_format": "h264",
+    # duración objetivo (minutos) del montaje que pide la AI (Tarea 5, plan §8)
+    "montage_target_minutes": 15,
     # velocidad máxima del preview a la que el audio sigue sonando (estirado con tono
     # conservado). Por encima (el skim a ×8) se silencia, pero FFplay sigue dando reloj.
     "preview_audio_max_rate": 4.0,

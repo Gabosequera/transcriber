@@ -840,6 +840,41 @@ def main():
             app.attributes("-topmost", False)
             workspace.set_mode("source"); app.update()
             print(f"  captura del montaje: {args.screenshot}", flush=True)
+        # ---- Fase E: Tarea 5, la AI propone el montaje (pedido → propuesta → import protegido) ----
+        workspace.montage_minutes.delete(0, "end"); workspace.montage_minutes.insert(0, "0.1")   # 6 s
+        workspace.set_mode("montage")
+        montage.select(["clip-000003"]); assert ed.ejecutar("edit.accept")                   # protegido
+        assert next(c for c in montage.doc["clips"] if c["clip_id"] == "clip-000003")["state"] == "accepted"
+        workspace.set_mode("source")
+        workspace._ai_option("montage")
+        spin(lambda: not workspace.worker.is_alive())
+        spin(lambda: workspace.cycle_label.cget("text").startswith("Pedido de montaje listo"))
+        request = editorial_io.read_json(views / "montaje-request.json")
+        assert request["pass_required"] == 1 and request["montage_digest"] and request["target_seconds"] == 6.0
+        assert "▶ Tema" in (views / "montaje-transcript.md").read_text(encoding="utf-8")
+        assert (views / "montaje-current.md").is_file() and (views / "montaje-signals.md").is_file()
+        assert __import__("hardware").load().get("montage_target_minutes") == 0.1
+        proposal_m = dict(schema="editorial-montage-proposal/1", planner="smoke-ai", request_id=request["request_id"],
+                          source_master_digest=request["source_master_digest"],
+                          source_layers_digest=request["source_layers_digest"], montage_digest=request["montage_digest"],
+                          title="Smoke", sections=[], notes="", target_seconds=6.0,
+                          clips=[dict(clip_id="k", keep="clip-000003"),
+                                 dict(clip_id="n", source_ini=0.2, source_fin=1.0, label="cold open",
+                                      reason="arranca con la palabra inicio", confidence=.7)], **{"pass": 1})
+        workspace._import_montage(editorial_io.atomic_write_json(views / "montaje.proposed.json", proposal_m))
+        spin(lambda: not workspace.worker.is_alive() and montage.doc and montage.doc["analysis"]["pass"] == 1)
+        spin(lambda: workspace.cycle_label.cget("text").startswith("Montaje importado"))
+        by_id = {c["clip_id"]: c for c in montage.doc["clips"]}
+        assert by_id["clip-000003"]["state"] == "accepted"                                   # se quedó
+        assert any(c["origin"] == "ai" and c["label"] == "cold open" for c in montage.doc["clips"])
+        assert controller.history.peek_undo().label == "importar montaje de la AI"
+        assert editorial_io.read_json(views / "montaje-request.json")["pass_required"] == 2
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"                             # deshacer el import
+        assert not any(c["label"] == "cold open" for c in montage.doc["clips"])
+        assert ed._key_toplevel(ev(ed.tl, "r", ctrl)) == "break"
+        assert any(c["label"] == "cold open" for c in montage.doc["clips"])
+        workspace.montage_minutes.delete(0, "end"); workspace.montage_minutes.insert(0, "15")
+        __import__("hardware").set_(montage_target_minutes=15)                 # config.json de desarrollo
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

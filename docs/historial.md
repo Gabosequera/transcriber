@@ -756,3 +756,20 @@ el orden de la lista) y publica un hijo con segmentos no cronológicos
 (`time_map(chronological=False)`). Caja MONTAJE en el panel con estado y «Exportar
 montaje». 11 tests nuevos (modelo, historial, exportación real no cronológica con
 hijo) y bloque del smoke con captura (`--screenshot`). 146 tests.
+
+## 2026-09-07 — Tarea 5: la AI propone el montaje por temas (0.4.0)
+
+Fase E del plan: la etapa nueva que pidió Gabriel. «Preparar para la AI ▾ → Montaje
+por temas» escribe el pedido con la duración objetivo (campo en la caja MONTAJE, 15 min
+por defecto, ±15 %), el transcript con los temas y subtemas intercalados como
+encabezados, las señales con la lista de picos y, en pasadas siguientes, la secuencia
+actual con una tarjeta por junta (palabras a cada lado, salto temporal, temas, riesgo
+mecánico). La AI responde `montaje.proposed.json` (clips en orden de secuencia, con
+tema, motivo, confianza y nota de junta; `keep` y `repeat`); la app valida identidad y
+digests (también el del montaje vivo), ajusta bordes, avisa sin bloquear cuando la
+duración o un clip se salen de los límites, reemplaza solo los clips de la AI que la
+persona no aceptó ni editó, coloca los nuevos en V1 en el orden propuesto y sube la
+pasada. La sección «Tarea 5 — Montaje por temas» de la skill pide explícitamente
+conservar el humor tal como es (la AI no censura; Resolve es la última pasada humana).
+Tres tests del ciclo (pedido y transcript, validación con tolerancia/repetidos/orden,
+bucle de dos pasadas con protección y `keep`) y el bloque del smoke; 149 tests.

@@ -399,7 +399,7 @@ def export_montage(master_path, montage, source, output_dir, *, fmt=DEFAULT_FORM
         if extension in ("mp4", "mov", "m4a"):
             command += ["-movflags", "+faststart"]
         command += ["-progress", "pipe:1", "-loglevel", "error", str(target)]
-        _encode(command, cancel, progress_cb, expected)
+        _encode(command, cancel, lambda fraction: progress_cb(fraction) if progress_cb else None, expected)
         script.unlink(missing_ok=True)
         actual = medios.inspeccionar(target)
         tolerance = max(0.15, 2 * frame) + len(pieces) * frame

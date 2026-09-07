@@ -333,6 +333,36 @@ todas las pistas de audio, y publica su proyecto hijo con `derivation.segments` 
 orden (para seguir con la AI sobre el resultado). Todo vive en `views/montaje.json`
 (`editorial-montaje/1`), atado a la huella del medio.
 
+## 8. Montaje por temas con la AI (Tarea 5)
+
+Sobre el video recortado con su capa de temas, **Preparar para la AI ▾ → Montaje por
+temas** le pide a la AI que edite de verdad: elegir los mejores tramos, agruparlos por
+tema aunque en la grabación estén separados, ordenarlos (cold open incluido) y unirlos
+con una nota por junta, hasta la **duración objetivo** que pones en la caja MONTAJE
+(minutos; por defecto 15, ±15 %; se recuerda). La AI **no censura**: conserva las
+uniones graciosas, lo funable, lo desubicado y el humor negro; el criterio para dejar
+fuera un tramo es aporte, no contenido. La censura la haces tú después en Resolve.
+
+1. La app escribe `views/montaje-request.json` (identificadores, objetivo, tolerancia,
+   pasada, límites de clip), `montaje-agent-request.md`, `montaje-transcript.md` (el
+   transcript con IDs y timecodes **y los temas y subtemas intercalados como
+   encabezados ▶/◀**), `montaje-signals.md` (risa, arousal y énfasis por intervención
+   más la lista de picos) y, si ya hay montaje, `montaje-current.md`: la secuencia
+   actual con lo que aceptaste o editaste y una **tarjeta por junta** (últimas y
+   primeras palabras, salto temporal, temas de cada lado, riesgo mecánico).
+2. La AI responde `views/montaje.proposed.json` (clips en orden de secuencia con tema,
+   motivo, confianza y nota de junta; `keep` para conservar un clip existente; `repeat`
+   solo para un callback deliberado). La app la importa sola: valida identidad y
+   digests, ajusta bordes hasta 1,5 s, avisa si la duración se sale de la tolerancia o
+   un clip es muy corto o largo (se importa igual: tú decides), **reemplaza solo los
+   clips de la AI que no aceptaste ni editaste**, conserva los tuyos y los aceptados
+   donde están, coloca los nuevos en V1 en el orden propuesto y guarda
+   `montaje-pass<n>.json`. La línea de estado dice «Montaje importado (pasada n)».
+3. Revisa en modo Montaje: reproduce, acepta (`E`), mueve, sube a V2, borra. Pulsa otra
+   vez **Montaje por temas** para la pasada siguiente con tus correcciones protegidas,
+   y al final **Exportar montaje**: ese video (con su proyecto hijo) es el que va a
+   Resolve.
+
 ## Archivos del proyecto
 
 **Preparar para la AI ▾ → Solo temas** prepara la Tarea 3 de la skill. Con un bloque

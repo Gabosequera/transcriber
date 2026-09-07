@@ -255,6 +255,7 @@ class AutomaticWorkspace:
         self.plan: dict | None = None
         self._last_plan_stamp = None
         self._last_trims_stamp = None
+        self._last_montage_stamp = None
         self._poll_counter = 0
         self.review_dialog = None
         # ---- recortes (carril interactivo; documento views/trims.json) ----
@@ -534,6 +535,17 @@ class AutomaticWorkspace:
                                            justify="left", wraplength=max(140, self._panel_width - 48),
                                            font=ctk.CTkFont(size=10))
         self.montage_status.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 4))
+        minutes_row = ctk.CTkFrame(self.montage_box, fg_color="transparent")
+        minutes_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(0, 6))
+        minutes_row.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(minutes_row, text="Duración objetivo para la AI (min)", text_color="#c6cec9",
+                     anchor="w", font=ctk.CTkFont(size=11)).grid(row=0, column=0, sticky="ew")
+        self.montage_minutes = ctk.CTkEntry(minutes_row, width=52, height=24, font=ctk.CTkFont(size=11))
+        saved_minutes = hardware.load().get("montage_target_minutes") or 15
+        self.montage_minutes.insert(0, f"{float(saved_minutes):g}")
+        self.montage_minutes.grid(row=0, column=1, sticky="e")
+        tip(self.montage_minutes, "Minutos que debe durar el montaje que proponga la AI (±15 %). Por "
+                                  "defecto 15; se recuerda.")
         self.montage_export_button = ctk.CTkButton(self.montage_box, text="Exportar montaje", height=28,
                                                    state="disabled", fg_color="#8a5a24", hover_color="#a06a2b",
                                                    command=self._export_montage)
@@ -566,7 +578,8 @@ class AutomaticWorkspace:
         import editorial_montaje
         doc = self.montage.doc
         summary = editorial_montaje.stats(doc) if doc else None
-        show = self.montage.mode == "montage" or bool(summary and summary["total"])
+        show = bool(self.result) and (self.montage.mode == "montage" or bool(summary and summary["total"])
+                                      or self.layers.store is not None)
         if show:
             self.montage_box.grid()
         else:
@@ -774,7 +787,73 @@ class AutomaticWorkspace:
         "topics": ("Solo temas", "_prepare_topics"),
         "trims": ("Solo recortes", "_prepare_review"),
         "deep": ("Recortes profundos", "_prepare_review_deep"),
+        "montage": ("Montaje por temas", "_prepare_montage"),
     }
+
+    def _target_minutes(self) -> float:
+        try:
+            minutes = float(self.montage_minutes.get().strip().replace(",", "."))
+        except (ValueError, AttributeError):
+            minutes = 15.0
+        if minutes <= 0:
+            raise ValueError("la duración objetivo debe ser positiva (minutos)")
+        return minutes
+
+    def _prepare_montage(self):
+        """«Preparar para la AI → Montaje por temas» (plan §8): el pedido de la Tarea 5
+        sobre el medio abierto (normalmente el hijo recortado) con la capa de temas."""
+        import editorial_montaje
+        master = self._master_path()
+        if not self.layers.store or not master:
+            self._append_log("Para el montaje hace falta la metadata del medio.")
+            return
+        try:
+            minutes = self._target_minutes()
+        except ValueError as error:
+            messagebox.showwarning("Duración objetivo", str(error))
+            return
+        hardware.set_(montage_target_minutes=minutes)
+        store = self.layers.store
+        topics = editorial_montaje.topics_layer_of(store.visible())
+        if topics is None:
+            self._append_log("Aviso: no hay capa «Temas y subtemas»; la AI trabajará solo con el transcript. "
+                             "Lo ideal es pedir antes «Solo temas».")
+        snapshot = self.layers.snapshot()
+        doc = copy.deepcopy(self.montage.doc) if self.montage.doc else None
+        data = store.master
+
+        def work():
+            request = editorial_montaje.prepare(master.parent, data, snapshot, doc,
+                                                target_seconds=minutes * 60, topics_layer=topics)
+            self.events.put({"tipo": "review_written", "request": master.parent / "views" / "montaje-agent-request.md",
+                             "hint": (f"Pide a la AI la Tarea 5 de la skill (pasada {request['pass_required']}, "
+                                      f"objetivo {minutes:.0f} min); montaje.proposed.json se importa solo.")})
+        self._last_montage_stamp = None
+        self._background(work, label="prepare:montage")
+
+    def _import_montage(self, path):
+        import editorial_montaje
+        master = self._master_path()
+        if not self.layers.store or not master:
+            return
+        self._mark_imported(path, "_last_montage_stamp")
+        snapshot = self.layers.snapshot()
+        store = self.layers.store
+        topics = editorial_montaje.topics_layer_of(store.visible())
+        before = {"montaje": self.layers._doc_snapshot("montaje")}
+        doc = copy.deepcopy(self.montage.doc) if self.montage.doc else None
+        try:
+            proposal = read_json(path)
+        except (OSError, ValueError) as error:
+            self._append_log(f"montaje.proposed.json ilegible: {error}")
+            return
+
+        def work():
+            merged, validated, message = editorial_montaje.import_proposal(
+                master.parent, store.master, snapshot, doc, proposal, topics_layer=topics)
+            self.events.put({"tipo": "montage_imported", "before": before, "message": message,
+                             "master": str(master)})
+        self._background(work, label="import:montage")
 
     def _ai_menu(self):
         """La flecha del botón principal: las variantes de «Preparar para la AI»."""
@@ -884,6 +963,7 @@ class AutomaticWorkspace:
         self.plan = None
         self._last_plan_stamp = None
         self._last_trims_stamp = None
+        self._last_montage_stamp = None
         self.track_widgets = []
         self.trims = None
         self.trims_path = None
@@ -1118,6 +1198,15 @@ class AutomaticWorkspace:
                     self.editor.refrescar_layout()
                     self._append_log(event["message"])
                     self._refresh_cycle_label()
+                elif kind == "montage_imported":
+                    self._last_import_error = None
+                    self._background_done()
+                    if str(self._master_path()) == event.get("master") and self.layers.store:
+                        self.montage.load(event["master"], self.layers.store.master)
+                        self._record_layers(event.get("before") or {}, "importar montaje de la AI")
+                        self.montage._after_write()
+                    self._append_log(event["message"])
+                    self._refresh_cycle_label()
                 elif kind == "review_written":
                     self._review_stale = False
                     self._background_done()
@@ -1195,6 +1284,7 @@ class AutomaticWorkspace:
                                 self._import_trims)
             self._poll_proposal(views / "layers.proposed.json", "_last_layers_stamp", self._import_layers)
             self._poll_proposal(views / "topics.proposed.json", "_last_topics_stamp", self._import_topics)
+            self._poll_proposal(views / "montaje.proposed.json", "_last_montage_stamp", self._import_montage)
             self._refresh_cycle_label()
         self.f.after(100, self._pump)
 
@@ -1275,6 +1365,8 @@ class AutomaticWorkspace:
             self._import_layers(Path(path))
         elif schema == "editorial-topics-proposal/1":
             self._import_topics(Path(path))
+        elif schema == "editorial-montage-proposal/1":
+            self._import_montage(Path(path))
         else:
             self._import_plan(Path(path))
 

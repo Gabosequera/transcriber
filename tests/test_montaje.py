@@ -285,3 +285,146 @@ class MontageExportTests(unittest.TestCase):
             empty = montaje.new_document(master["media"]["fingerprint"], 12)
             with self.assertRaisesRegex(ValueError, "clips activos"):
                 podcast_export.export_montage(master_path, empty, source, root / "out2")
+
+
+class TaskFiveTests(unittest.TestCase):
+    """Tarea 5 (plan §8): pedido, transcript con temas, validación, protección y bucle."""
+
+    def setUp(self):
+        import editorial_chunks
+        import editorial_layers
+        from test_projects import fixture
+        self.master = fixture()
+        self.master["media"]["fingerprint"] = dict(FP)
+        self.master["media"]["path"] = "hijo.mp4"
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "views").mkdir()
+        self.topics = editorial_layers.new_layer(self.master, "Temas y subtemas", kind="topics", layer_id="topics-x")
+        self.topics["items"] = [
+            {"item_id": "t1", "label": "Inicio", "comment": "arranque", "state": "proposed", "edited": False,
+             "parent_id": None, "ranges": [{"t_ini": 0.5, "t_fin": 3.0}]},
+            {"item_id": "t1a", "label": "Sub inicio", "comment": "", "state": "proposed", "edited": False,
+             "parent_id": "t1", "ranges": [{"t_ini": 1.0, "t_fin": 2.0}]},
+            {"item_id": "t2", "label": "Retorno", "comment": "", "state": "proposed", "edited": False,
+             "parent_id": None, "ranges": [{"t_ini": 7.5, "t_fin": 10.0}]}]
+        self.snapshot = editorial_layers.write_snapshot(self.root, self.master, [self.topics])
+        self.digest = editorial_chunks.source_master_digest(self.master)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def proposal(self, request, clips, **extra):
+        return {"schema": montaje.PROPOSAL_SCHEMA, "planner": "test-ai", "request_id": request["request_id"],
+                "source_master_digest": request["source_master_digest"],
+                "source_layers_digest": request["source_layers_digest"],
+                "montage_digest": request["montage_digest"], "pass": request["pass_required"],
+                "target_seconds": request["target_seconds"], "title": "Prueba", "sections": [],
+                "clips": clips, "notes": "nada", **extra}
+
+    def test_prepare_writes_request_transcript_with_topics_and_signals(self):
+        request = montaje.prepare(self.root, self.master, self.snapshot, None, target_seconds=6,
+                                  topics_layer=self.topics)
+        views = self.root / "views"
+        self.assertEqual((request["pass_required"], request["montage_digest"], request["target_seconds"]), (1, None, 6.0))
+        transcript = (views / "montaje-transcript.md").read_text(encoding="utf-8")
+        self.assertIn("## ▶ Tema: Inicio (t1)", transcript)
+        self.assertIn("## ▶ Subtema: Sub inicio (t1a)", transcript)
+        self.assertIn("## ◀ fin: Retorno (t2)", transcript)
+        self.assertIn("`A-u-1`", transcript)                                   # los IDs siguen ahí
+        self.assertLess(transcript.index("▶ Tema: Inicio"), transcript.index("`A-u-1`"))
+        signals = (views / "montaje-signals.md").read_text(encoding="utf-8")
+        self.assertIn("## Picos", signals)
+        self.assertIn("risa de 6.0 s en A", signals)
+        self.assertIn("`A-u-1`", signals)
+        text = (views / "montaje-agent-request.md").read_text(encoding="utf-8")
+        self.assertIn("Tarea 5", text)
+        self.assertIn(request["request_id"], text)
+        self.assertIn("primera pasada", text)
+        self.assertFalse((views / "montaje-current.md").exists())
+        with self.assertRaises(ValueError):
+            montaje.prepare(self.root, self.master, self.snapshot, None, target_seconds=0)
+
+    def test_validation_tolerance_repeats_protection_and_order(self):
+        request = montaje.prepare(self.root, self.master, self.snapshot, None, target_seconds=6,
+                                  tolerance=0.5, topics_layer=self.topics)
+        clips = [{"clip_id": "c1", "source_ini": 7.5, "source_fin": 10.0, "label": "cierre primero",
+                  "topic_ids": ["t2"], "reason": "abre con el remate", "confidence": .8},
+                 {"clip_id": "c2", "source_ini": 0.5, "source_fin": 3.0, "label": "inicio",
+                  "topic_ids": ["t1"], "reason": "premisa", "confidence": .7,
+                  "first_utterance_id": "A-u-1"}]
+        validated = montaje.validate_proposal(self.proposal(request, clips), self.master, request, self.snapshot, None)
+        self.assertEqual([c["ai_clip_id"] for c in validated["clips"]], ["c1", "c2"])
+        self.assertTrue(3.0 <= validated["total_seconds"] <= 5.5, validated["total_seconds"])   # bordes ajustados
+        self.assertEqual(validated["warnings"], [])
+        # fuera de la tolerancia: se importa igual, con aviso
+        long = montaje.validate_proposal(self.proposal(request, clips[:1]), self.master, request, self.snapshot, None)
+        self.assertTrue(any("fuera de la tolerancia" in w for w in long["warnings"]))
+        # un tramo repetido sin repeat es error; con repeat y motivo, aviso
+        twice = clips + [{"clip_id": "c3", "source_ini": 7.5, "source_fin": 9.0, "reason": "callback"}]
+        with self.assertRaisesRegex(ValueError, "repite"):
+            montaje.validate_proposal(self.proposal(request, twice), self.master, request, self.snapshot, None)
+        twice[2]["repeat"] = True
+        ok = montaje.validate_proposal(self.proposal(request, twice), self.master, request, self.snapshot, None)
+        self.assertTrue(any("callback" in w for w in ok["clips"][2]["warnings"]))
+        for bad, message in (({"pass": 2}, "fuera de orden"), ({"request_id": "x"}, "request_id"),
+                             ({"montage_digest": "y"}, "montage_digest"), ({"clips": []}, "no vac")):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, message):
+                montaje.validate_proposal({**self.proposal(request, clips), **bad}, self.master, request,
+                                          self.snapshot, None)
+        with self.assertRaisesRegex(ValueError, "desconocido"):
+            montaje.validate_proposal(self.proposal(request, [{**clips[0], "last_utterance_id": "Z"}]),
+                                      self.master, request, self.snapshot, None)
+        with self.assertRaisesRegex(ValueError, "capas cambiaron"):
+            montaje.validate_proposal(self.proposal(request, clips), self.master, request,
+                                      {"source_layers_digest": "otro"}, None)
+
+    def test_import_loop_protects_accepted_and_edited_and_keeps(self):
+        import editorial_io
+        request = montaje.prepare(self.root, self.master, self.snapshot, None, target_seconds=6,
+                                  topics_layer=self.topics)
+        clips = [{"clip_id": "c1", "source_ini": 7.5, "source_fin": 10.0, "label": "cierre", "reason": "r", "confidence": .8},
+                 {"clip_id": "c2", "source_ini": 0.5, "source_fin": 3.0, "label": "inicio", "reason": "r", "confidence": .7}]
+        doc, validated, message = montaje.import_proposal(self.root, self.master, self.snapshot, None,
+                                                           self.proposal(request, clips), topics_layer=self.topics)
+        self.assertIn("pasada 1", message)
+        self.assertEqual([c["label"] for c in doc["clips"]], ["cierre", "inicio"])
+        self.assertEqual(doc["clips"][1]["seq_ini"], montaje.seq_fin(doc["clips"][0]))
+        self.assertEqual(doc["analysis"]["pass"], 1)
+        self.assertEqual(doc["analysis"]["ai_clip_ids"]["c1"], "clip-000001")
+        self.assertTrue((self.root / "views" / "montaje-pass1.json").is_file())
+        request2 = editorial_io.read_json(self.root / "views" / "montaje-request.json")
+        self.assertEqual(request2["pass_required"], 2)
+        self.assertEqual(request2["montage_digest"], montaje.content_digest(doc))
+        current = (self.root / "views" / "montaje-current.md").read_text(encoding="utf-8")
+        self.assertIn("junta", current)
+        self.assertIn("propuesto por la AI", current)
+        # la persona acepta el primero y edita el segundo (lo mueve a V2)
+        doc, _ = montaje.set_state(doc, ["clip-000001"], "accepted")
+        doc, _ = montaje.move(doc, "clip-000002", 5.0, "V2")
+        montaje.save_document(self.root / "views" / "montaje.json", doc)
+        # una segunda pasada preparada sobre ese montaje: la propuesta vieja ya no vale
+        request2 = montaje.prepare(self.root, self.master, self.snapshot, doc, target_seconds=6,
+                                   topics_layer=self.topics)
+        self.assertEqual(request2["pass_required"], 2)
+        self.assertIn("montaje-current.md", (self.root / "views" / "montaje-agent-request.md").read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "request_id"):
+            montaje.import_proposal(self.root, self.master, self.snapshot, doc, self.proposal(request, clips))
+        # pasada 2: conserva un clip con keep, añade uno nuevo; lo aceptado y lo editado no se mueven
+        second = [{"clip_id": "k1", "keep": "clip-000001"},
+                  {"clip_id": "n1", "source_ini": 4.0, "source_fin": 6.0, "label": "medio", "reason": "puente", "confidence": .6}]
+        doc2, validated2, message2 = montaje.import_proposal(self.root, self.master, self.snapshot, doc,
+                                                              self.proposal(request2, second), topics_layer=self.topics)
+        self.assertIn("pasada 2", message2)
+        by_id = {c["clip_id"]: c for c in doc2["clips"]}
+        self.assertEqual(by_id["clip-000001"]["state"], "accepted")                # sigue donde estaba
+        self.assertEqual(by_id["clip-000001"]["seq_ini"], 0.0)
+        self.assertEqual((by_id["clip-000002"]["track_id"], by_id["clip-000002"]["seq_ini"]), ("V2", 5.0))
+        new = next(c for c in doc2["clips"] if c["label"] == "medio")
+        self.assertEqual(new["track_id"], "V1")
+        self.assertGreaterEqual(new["seq_ini"], montaje.seq_fin(by_id["clip-000001"]))     # no pisa lo protegido
+        self.assertEqual(doc2["analysis"]["pass"], 2)
+        latest = editorial_io.read_json(self.root / "views" / "montaje-request.json")
+        with self.assertRaisesRegex(ValueError, "keep apunta"):
+            montaje.validate_proposal(self.proposal(latest, [{"clip_id": "k", "keep": "clip-000099"}]),
+                                      self.master, latest, self.snapshot, doc2)
