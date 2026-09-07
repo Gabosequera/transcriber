@@ -527,6 +527,14 @@ Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-ed
   `kind: "ai"`, respuestas con varias capas, «Preparar revisión editorial» (Tarea 4).
 - **Cerrado:** las siete fases del diseño están implementadas; 0.3.3 preparada.
 
+### Tarea 4 sobre un bloque real — 2026-09-07 (0.3.5)
+
+Primera pasada 1 real (28 temas, 39 subtemas): `editorial_topics.validate` ajusta el
+padre primero y en un mapa real casi todos los bordes se mueven, así que el subtema
+que comparte borde con el padre debe seguirlo (se localiza el rango padre por sus
+bordes `proposed` y el borde huérfano apunta al borde ajustado del padre). Pendiente:
+completar el ciclo (pasada 2 y recortes) con la app reinstalada en 0.3.5.
+
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 
 El pie de estado del editor tiene altura fija y su wrap sigue al ancho real de la

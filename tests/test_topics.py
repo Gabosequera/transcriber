@@ -79,3 +79,30 @@ class TopicsTests(unittest.TestCase):
         first['items'][0]['ranges'][0]['t_fin']=float('inf')
         with self.assertRaises(ValueError):
             topics.import_proposal(self.store,first,self.snapshot)
+
+    def test_subtopic_follows_adjusted_parent_border(self):
+        # Una palabra cruza el borde final propuesto (4.8): el padre se ajusta hasta
+        # 1.5 s y el subtema que compartía ese borde debe seguirlo, no quedar fuera.
+        master=fixture()
+        for t in master['tracks'].values():
+            t['words']=[{'word_id':t['track_id']+'-w-1','track_id':t['track_id'],'text':'x',
+                         't_ini':4.4,'t_fin':5.2}]
+            t['laughter']=[]
+        master['conversation']['utterances']=[]
+        store=layers.LayerStore(self.tmp.name,master)
+        snapshot=layers.write_snapshot(self.tmp.name,master,[])
+        request=topics.prepare(self.tmp.name,master,snapshot)
+        parent=layers.new_item(1,4.8,'Tema')
+        child=layers.new_item(3,4.8,'Subtema')
+        child['parent_id']=parent['item_id']
+        first=dict(schema=topics.SCHEMA,request_id=request['request_id'],
+                   source_master_digest=request['source_master_digest'],
+                   source_layers_digest=request['source_layers_digest'],
+                   complete=True,items=[parent,child],**{'pass':1})
+        topics.import_proposal(store,first,snapshot)
+        validated={i['item_id']:i['ranges'][0] for i in read_json(store.root/'views/topics-pass1.json')['items']}
+        p,c=validated[parent['item_id']],validated[child['item_id']]
+        self.assertNotAlmostEqual(p['t_fin'],4.8)
+        self.assertEqual(c['t_fin'],p['t_fin'])
+        self.assertGreaterEqual(c['t_ini'],p['t_ini'])
+        self.assertEqual(c['proposed']['t_fin'],4.8)

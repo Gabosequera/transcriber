@@ -105,10 +105,14 @@ def validate(proposal, master, request, snapshot, *, previous=None):
             for index, r in enumerate(item["ranges"]):
                 lower, upper = a, b
                 if item.get("parent_id"):
+                    # El padre ya se ajustó: se localiza por los bordes que propuso la AI
+                    # (los que contenían al subtema) y se usan sus bordes ajustados como
+                    # tope, de modo que un subtema que comparte borde siga al padre.
                     parent = next((p for p in by_id[item["parent_id"]]["ranges"]
-                                  if p["t_ini"] <= r["t_ini"] and p["t_fin"] >= r["t_fin"]), None)
+                                  if p.get("proposed", p)["t_ini"] <= r["t_ini"]
+                                  and p.get("proposed", p)["t_fin"] >= r["t_fin"]), None)
                     if parent is None:
-                        raise ValueError("el ajuste del tema padre deja un subtema fuera; revisa sus bordes")
+                        raise ValueError(f"el subtema {item['item_id']} no cabe en ningún rango de su tema")
                     lower, upper = parent["t_ini"], parent["t_fin"]
                 if index:
                     lower = max(lower, item["ranges"][index-1]["t_fin"])
@@ -117,16 +121,18 @@ def validate(proposal, master, request, snapshot, *, previous=None):
                 old = dict(r)
                 diagnostics = {}
                 for key in ("t_ini", "t_fin"):
-                    lo = max(lower, old[key]-1.5)
-                    hi = min(upper, old[key]+1.5)
+                    # Un borde que quedó fuera del padre ajustado apunta al borde del padre.
+                    target = min(max(old[key], lower), upper)
+                    lo = max(lower, target-1.5)
+                    hi = min(upper, target+1.5)
                     # Evitar que dos bordes de un tramo corto se crucen.
                     if key == "t_ini":
                         hi = min(hi, old["t_fin"]-.001)
                     else:
                         lo = max(lo, r["t_ini"]+.001)
                     if lo > hi:
-                        raise ValueError("no queda espacio para ajustar el tema")
-                    r[key], diagnostics[key] = editorial_chunks.snap_boundary(master,old[key],lo,hi,intervals=intervals)
+                        raise ValueError(f"no queda espacio para ajustar el tema {item['item_id']}")
+                    r[key], diagnostics[key] = editorial_chunks.snap_boundary(master,target,lo,hi,intervals=intervals)
                 r["proposed"] = old
                 r["boundary_diagnostics"] = diagnostics
         # Ajustar padre primero puede encogerlo sobre subtemas: rechazar sin publicar.

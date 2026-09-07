@@ -644,3 +644,19 @@ arriba, arrastrar define el rango, click fija la entrada, Ctrl+click la salida (
 sobrescriben) y Shift (click o arrastre) lo quita; los dos puntos se arrastran con el
 botón izquierdo y el cursor avisa; la reproducción vuelve a la entrada al llegar a la
 salida (re-sesión). Acciones `loop.*` en el menú, sin tecla por defecto.
+
+## 2026-09-07 — Primera Tarea 4 real: los subtemas siguen al padre ajustado (0.3.5)
+
+Primer intento de revisión editorial completa sobre un bloque real (42:34, dos pistas)
+con Claude: la pasada 1 de temas (28 temas, 39 subtemas, bordes en límites de
+intervención) fue rechazada con «el ajuste del tema padre deja un subtema fuera».
+Causa en `editorial_topics.validate`: el padre se ajusta primero hasta 1,5 s contra
+palabras y risas, y en un mapa real casi todos los bordes se mueven; cuando el padre
+se encoge, el subtema que compartía ese borde (el caso normal: el primer y el último
+subtema tocan los bordes del tema) ya no cabe en ningún rango ajustado y la búsqueda
+del padre fallaba. Ahora el rango padre se localiza por los bordes que la AI propuso
+(`proposed`), sus bordes ajustados hacen de tope y el borde del subtema que quedó fuera
+apunta al borde del padre, así que `snap_boundary` lo deja pegado a él. Los mensajes
+de error nombran el `item_id`. Test de regresión con una palabra que cruza el borde
+final compartido; 122 tests. La propuesta real valida completa (67 rangos ajustados,
+todos los subtemas dentro de su padre).
