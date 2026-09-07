@@ -153,6 +153,13 @@ class LayersController:
         self._draw_indexes = {}
         # deshacer/rehacer (diseño §4): pila de operaciones por medio cargado
         self.history = editorial_history.HistoryStack()
+        # herramientas de mouse y selección múltiple (diseño §7/§8)
+        self.tool = "select"
+        self.selection = []   # [(layer_id, item_id, segment)] ordenada por tiempo, un carril
+        self.on_tool_change = None
+        self._lane_y = {}
+        self._hover_state = None
+        self._cursor = None
 
     # ---- documentos: snapshot / revisión / restauración (diseño §4) ----
     # doc_id ∈ {"autor", "trims", "plan", "layer:<id>"} (Fase 7 añade "lanes").
@@ -236,13 +243,23 @@ class LayersController:
 
     def _after_write(self):
         """Tras escribir o restaurar: la selección solo sobrevive si el item existe."""
+        alive = []
+        for key in self.selection:
+            try:
+                _, item = self.find(key[0], key[1])
+            except StopIteration:
+                item = None
+            if item is not None:
+                alive.append(key)
+        if len(alive) != len(self.selection):
+            self.selection = alive
         if self.selected and self.selected[1]:
             try:
                 _, item = self.find(*self.selected[:2])
             except StopIteration:
                 item = None
             if item is None:
-                self.selected = None
+                self.selected = alive[-1] if alive else None
         self.snapshot()
         self.w._refresh_plan_buttons()
         self.w.editor.refrescar_layout()
@@ -325,11 +342,13 @@ class LayersController:
     def draw(self, layer, canvas, g, y):
         editor = self.w.editor
         start, span = editor.view
+        self._lane_y[layer["layer_id"]] = y
         canvas.create_rectangle(g[0], y, sum(g), y + 34, fill="#191f1c", outline="#343c37")
         parts=self.visible_parts(layer,start,start+span)
         occupied=set()
         for item, index in parts:
-            selected = self.selected and self.selected[:2] == (layer["layer_id"], item["item_id"])
+            selected = self.is_selected(layer["layer_id"], item["item_id"])
+            primary = bool(self.selected) and self.selected[:2] == (layer["layer_id"], item["item_id"])
             for part in [item["ranges"][index]]:
                 if part["t_fin"] < start or part["t_ini"] > start + span:
                     continue
@@ -357,74 +376,600 @@ class LayersController:
                 if selected:
                     for x in (a, b):
                         canvas.create_line(x, y + 11, x, y + 32, fill="white", width=3)
+                    if primary and len(self.selection) > 1:   # el primario: punto en el borde superior
+                        cx = (a + b) / 2
+                        canvas.create_oval(cx - 3, y + 9, cx + 3, y + 15, fill="white", outline="")
         canvas.create_text(g[0] + 4, y + 1, text=layer["name"], anchor="nw", fill="#aab6af",
                            font=("TkDefaultFont", 8))
 
+    # ---- herramientas de mouse (diseño §7/§8, Fase 6) ----
+    EDGE_PX = 8            # zona de borde a cada lado del inicio/fin de un item
+    NARROW_PX = 24         # por debajo, las zonas de borde son un tercio del ancho
+    CLICK_PX = 4           # menos que esto es un click, no un arrastre
+    TOOLS = ("select", "cut")
+
+    def set_tool(self, tool):
+        if tool not in self.TOOLS:
+            raise ValueError(tool)
+        if tool != self.tool:
+            self.tool = tool
+            self._hover_state = None
+            self._set_cursor("arrow")
+            if self.on_tool_change:
+                try:
+                    self.on_tool_change(tool)
+                except Exception:
+                    pass
+        self.w.editor.status("Herramienta: " + ("Corte (arrastra una caja; Shift resta; Ctrl mueve)"
+                                                if tool == "cut" else "Selección"))
+
+    def _set_cursor(self, cursor):
+        """El cursor del canvas cambia SOLO cuando cambia el estado, nunca por evento."""
+        if cursor != self._cursor:
+            self._cursor = cursor
+            try:
+                self.w.editor.tl.configure(cursor=cursor)
+            except tk.TclError:
+                pass
+
+    @staticmethod
+    def _lighter(color):
+        try:
+            r, g, b = (int(color[i:i + 2], 16) for i in (1, 3, 5))
+            return "#%02x%02x%02x" % tuple(min(255, int(c + (255 - c) * .55)) for c in (r, g, b))
+        except (ValueError, TypeError):
+            return "#ffffff"
+
+    def _parts(self, lid):
+        """[(item_id, t_ini, t_fin)] de los items de UN rango del carril (los gestos de
+        caja y la marquesina trabajan con un rango por item)."""
+        layer, _ = self.find(lid)
+        return [(i["item_id"], r["t_ini"], r["t_fin"]) for i in layer["items"]
+                for r in i["ranges"][:1] if len(i["ranges"]) == 1]
+
+    def _visible_parts_between(self, lid, t0, t1):
+        layer, _ = self.find(lid)
+        return [(item["item_id"], item["ranges"][index]["t_ini"], item["ranges"][index]["t_fin"])
+                for item, index in self.visible_parts(layer, min(t0, t1), max(t0, t1))]
+
     def hit(self, lid, x, g):
+        """Item bajo x en el carril, por el índice ordenado (`visible_parts`, bisect):
+        O(log n + k) aunque haya miles de recortes. Devuelve (item, índice del tramo,
+        modo) con modo `start`/`end` (a ≤ 8 px del borde; un tercio del ancho en items
+        estrechos) o `move` (cuerpo). El seleccionado tiene prioridad."""
         editor = self.w.editor
         layer, _ = self.find(lid)
+        t = editor._x2t(x, g)
+        tol = (self.EDGE_PX + 2) * editor.view[1] / max(g[1], 1)
         hits = []
-        for item in layer["items"]:
-            for index, part in enumerate(item["ranges"]):
-                a, b = editor._t2x(part["t_ini"], g), editor._t2x(part["t_fin"], g)
-                if a - 5 <= x <= b + 5:
-                    mode = "start" if abs(x-a) <= 6 else "end" if abs(x-b) <= 6 else "move"
-                    hits.append((item, index, mode))
+        for item, index in self.visible_parts(layer, t - tol, t + tol):
+            part = item["ranges"][index]
+            a, b = editor._t2x(part["t_ini"], g), editor._t2x(part["t_fin"], g)
+            b = max(a + 3, b)
+            if a - self.EDGE_PX <= x <= b + self.EDGE_PX:
+                width = b - a
+                zone = self.EDGE_PX if width >= self.NARROW_PX else max(1.0, width / 3)
+                mode = "start" if abs(x - a) <= zone else "end" if abs(x - b) <= zone else "move"
+                hits.append((item, index, mode))
         if self.selected:
             active = next((h for h in hits if h[0]["item_id"] == self.selected[1]), None)
             if active:
                 return active
         return hits[-1] if hits else None
 
+    # ---- selección múltiple (§8): `selection` lista ordenada por tiempo, un carril ----
+    def _key_time(self, key):
+        try:
+            _, item = self.find(key[0], key[1])
+            return min(r["t_ini"] for r in item["ranges"]) if item else 0.0
+        except StopIteration:
+            return 0.0
+
+    def select(self, keys, primary=None):
+        keys = [tuple(k) for k in keys]
+        lanes = {k[0] for k in keys}
+        if len(lanes) > 1:
+            raise ValueError("solo se seleccionan items de un mismo carril")
+        self.selection = sorted(dict.fromkeys(keys), key=self._key_time)
+        if primary is None or tuple(primary) not in self.selection:
+            primary = self.selection[-1] if self.selection else None
+        self.selected = tuple(primary) if primary else (self.selected[0], None, 0) if self.selected else None
+
+    def clear_selection(self, lid=None):
+        self.selection = []
+        self.selected = (lid, None, 0) if lid else None
+
+    def is_selected(self, lid, item_id):
+        return any(k[0] == lid and k[1] == item_id for k in self.selection) or (
+            bool(self.selected) and self.selected[:2] == (lid, item_id))
+
+    def selected_items(self):
+        """[(lid, item copia, segmento)] de la selección (o del primario)."""
+        keys = self.selection or ([self.selected] if self.selected and self.selected[1] else [])
+        out = []
+        for lid, iid, segment in keys:
+            try:
+                _, item = self.find(lid, iid)
+            except StopIteration:
+                item = None
+            if item is not None:
+                out.append((lid, item, segment))
+        return out
+
+    def select_all(self):
+        lid = self.selected[0] if self.selected else None
+        if lid is None:
+            lid = next((l["layer_id"] for l in self.all() if l["items"]), None)
+        if lid is None:
+            return True
+        layer, _ = self.find(lid)
+        self.select([(lid, i["item_id"], 0) for i in layer["items"]])
+        self.w.editor.redibujar()
+        self.sync_detail()
+        self.w.editor.status(f"{len(self.selection)} items seleccionados en «{layer['name']}»")
+        return True
+
+    # ---- gestos ----
     def gesture(self, lid, phase, e, g, y):
         if not self.store or (self.w.worker and self.w.worker.is_alive()):
             return True
-        editor = self.w.editor
-        t = max(0, min(self.store.master["media"]["duration"], editor._x2t(e.x, g)))
-        if phase in ("press", "doble"):
+        if phase == "doble":
             hit = self.hit(lid, e.x, g)
-            self.selected = (lid, hit[0]["item_id"], hit[1]) if hit else (lid, None, 0)
-            self.w.sel_cut = None
-            editor._seleccionar(None)
-            self.drag = dict(lid=lid, t=t, now=t, hit=copy.deepcopy(hit))
-            if phase == "doble":
+            if hit:
+                self.select([(lid, hit[0]["item_id"], hit[1])])
                 self.edit_dialog()
-            editor.redibujar()
-            self.sync_detail()
             return True
-        if phase == "motion" and self.drag:
-            self.drag["now"] = t
-            editor.status(f"{format_time(self.drag['t'])} → {format_time(t)} · suelta para guardar")
-            canvas = editor.tl
-            canvas.delete("layer-drag")
-            canvas.create_rectangle(editor._t2x(min(t, self.drag["t"]), g), y + 10,
-                                    editor._t2x(max(t, self.drag["t"]), g), y + 33,
-                                    outline="white", dash=(3, 2), tags="layer-drag")
-            return True
-        if phase == "release" and self.drag:
-            drag, self.drag = self.drag, None
-            if abs(drag["now"] - drag["t"]) < .05:
-                return True
-            try:
-                if drag["hit"]:
-                    item, index, mode = drag["hit"]
-                    part = item["ranges"][index]
-                    delta = drag["now"] - drag["t"]
-                    if mode == "move":
-                        delta = max(-part["t_ini"], min(delta, self.store.master["media"]["duration"]-part["t_fin"]))
-                        part["t_ini"] += delta
-                        part["t_fin"] += delta
-                    else:
-                        part["t_ini" if mode == "start" else "t_fin"] = drag["now"]
-                    self.persist(lid, item, label="mover item" if mode == "move" else "estirar item")
+        if phase == "press":
+            return self._press(lid, e, g, y)
+        if phase == "motion":
+            return self._motion(e, g)
+        if phase == "release":
+            return self._release(e, g)
+        return True
+
+    def _press(self, lid, e, g, y):
+        editor = self.w.editor
+        t = max(0.0, min(self.store.master["media"]["duration"], editor._x2t(e.x, g)))
+        state = int(getattr(e, "state", 0) or 0)
+        shift, ctrl = bool(state & 0x1), bool(state & 0x4)
+        hit = self.hit(lid, e.x, g)
+        self.w.sel_cut = None
+        editor._seleccionar(None)
+        self.drag = None
+        if self.tool == "cut" and ctrl and not hit:
+            return False                       # Ctrl + vacío = scrub (lo hace el editor)
+        if self.tool == "cut" and not ctrl:
+            if hit:
+                self.select([(lid, hit[0]["item_id"], hit[1])])
+            else:
+                self.clear_selection(lid)
+            self.drag = dict(kind="box", lid=lid, y=y, t0=t, t1=t, x0=e.x, x1=e.x,
+                             subtract=shift, hit=hit)
+        elif hit:
+            item, index, mode = hit
+            key = (lid, item["item_id"], index)
+            if shift and self.tool == "select":
+                keys = [k for k in self.selection if k[0] == lid]
+                if key in keys:
+                    keys.remove(key)
                 else:
-                    self.persist(lid, layers.new_item(min(drag["t"], drag["now"]), max(drag["t"], drag["now"])),
-                                 create=True, label="crear item")
-                    self.edit_dialog()
-            except Exception as error:
-                messagebox.showerror("No se guardó el rango", str(error), parent=self.w.f)
-            editor.redibujar()
+                    keys.append(key)
+                self.select(keys, primary=key if key in keys else None)
+            elif mode in ("start", "end"):
+                if key not in self.selection:
+                    self.select([key])
+                else:
+                    self.selected = key
+                self.drag = dict(kind="edge", lid=lid, y=y, key=key, mode=mode, t0=t, t1=t,
+                                 x0=e.x, x1=e.x, part=dict(item["ranges"][index]),
+                                 color=self._item_color(self.find(lid)[0], item))
+            else:
+                if key not in self.selection:
+                    self.select([key])
+                else:
+                    self.selected = key
+                self.drag = dict(kind="move", lid=lid, y=y, t0=t, t1=t, x0=e.x, x1=e.x,
+                                 items=[(k, copy.deepcopy(self.find(k[0], k[1])[1]["ranges"]))
+                                        for k in self.selection])
+        else:
+            self.clear_selection(lid)
+            self.drag = dict(kind="marquee", lid=lid, y=y, t0=t, t1=t, x0=e.x, x1=e.x,
+                             y0=e.y, y1=e.y)
+        editor.redibujar()
+        self.sync_detail()
+        return True
+
+    def _drag_delta(self, d):
+        """Delta de un arrastre de conjunto, acotado para que ningún item salga del medio."""
+        delta = d["t1"] - d["t0"]
+        duration = self.store.master["media"]["duration"]
+        lo = min(r["t_ini"] for _, ranges in d["items"] for r in ranges)
+        hi = max(r["t_fin"] for _, ranges in d["items"] for r in ranges)
+        return max(-lo, min(delta, duration - hi))
+
+    def _motion(self, e, g):
+        d = self.drag
+        if not d:
             return True
+        editor = self.w.editor
+        canvas = editor.tl
+        t = max(0.0, min(self.store.master["media"]["duration"], editor._x2t(e.x, g)))
+        d["t1"], d["x1"], d["y1"] = t, e.x, getattr(e, "y", d.get("y1", 0))
+        canvas.delete("layer-drag")
+        y = d["y"]
+        if d["kind"] == "box":
+            a, b = sorted((d["t0"], t))
+            canvas.create_rectangle(editor._t2x(a, g), y + 10, editor._t2x(b, g), y + 33,
+                                    outline="#ff6b6b" if d["subtract"] else "white",
+                                    dash=(3, 2), tags="layer-drag")
+            editor.status(f"{format_time(a)} → {format_time(b)} · "
+                          + ("suelta para restar" if d["subtract"] else "suelta para crear o estirar"))
+        elif d["kind"] == "marquee":
+            canvas.create_rectangle(d["x0"], d["y0"], e.x, d["y1"], outline="white",
+                                    dash=(3, 2), tags="layer-drag")
+        elif d["kind"] == "move":
+            delta = self._drag_delta(d)
+            for key, ranges in d["items"]:
+                ly = self._lane_y.get(key[0], y)
+                for r in ranges:
+                    canvas.create_rectangle(editor._t2x(r["t_ini"] + delta, g), ly + 10,
+                                            editor._t2x(r["t_fin"] + delta, g), ly + 33,
+                                            outline="white", dash=(3, 2), tags="layer-drag")
+            editor.status(f"mover {len(d['items'])} item(s) {delta:+.2f} s · suelta para guardar")
+        elif d["kind"] == "edge":
+            part = d["part"]
+            try:
+                new = edits.trim_range(part, d["mode"], t)
+            except ValueError:
+                new = part
+            canvas.create_rectangle(editor._t2x(new["t_ini"], g), y + 10,
+                                    editor._t2x(new["t_fin"], g), y + 33,
+                                    outline="white", dash=(3, 2), tags="layer-drag")
+            old = part["t_ini" if d["mode"] == "start" else "t_fin"]
+            new_t = new["t_ini" if d["mode"] == "start" else "t_fin"]
+            text = f"{format_time(old)[3:-1]} → {format_time(new_t)[3:-1]} · {new_t - old:+.1f} s"
+            x = max(4, min(e.x + 8, canvas.winfo_width() - 150))
+            label = canvas.create_text(x, y - 2, text=text, anchor="sw", fill="white",
+                                       font=("TkDefaultFont", 8), tags="layer-drag")
+            bbox = canvas.bbox(label)
+            if bbox:
+                bg = canvas.create_rectangle(bbox[0] - 3, bbox[1] - 2, bbox[2] + 3, bbox[3] + 2,
+                                             fill="#252d28", outline="#637368", tags="layer-drag")
+                canvas.tag_lower(bg, label)
+        return True
+
+    def _release(self, e, g):
+        d, self.drag = self.drag, None
+        if not d:
+            return True
+        editor = self.w.editor
+        editor.tl.delete("layer-drag")
+        moved = abs(d.get("x1", d["x0"]) - d["x0"]) >= self.CLICK_PX
+        try:
+            if d["kind"] == "box" and moved:
+                self.apply_box(d["lid"], min(d["t0"], d["t1"]), max(d["t0"], d["t1"]),
+                               subtract=d["subtract"])
+            elif d["kind"] == "marquee" and moved:
+                self._marquee(d)
+            elif d["kind"] == "move" and moved:
+                delta = self._drag_delta(d)
+                items = []
+                for key, ranges in d["items"]:
+                    _, item = self.find(key[0], key[1])
+                    item["ranges"] = [{**r, "t_ini": round(r["t_ini"] + delta, 3),
+                                       "t_fin": round(r["t_fin"] + delta, 3)} for r in ranges]
+                    items.append(item)
+                n = len(items)
+                self.persist_many(d["lid"], items, label=f"mover {n} item(s)" if n > 1 else "mover item")
+            elif d["kind"] == "edge" and moved:
+                lid, iid, index = d["key"]
+                _, item = self.find(lid, iid)
+                item["ranges"][index] = edits.trim_range(item["ranges"][index], d["mode"], d["t1"])
+                self.persist(lid, item, label="estirar item")
+                self.selected = (lid, iid, index)
+        except Exception as error:
+            editor.status(f"⚠ no se guardó: {error}")
+        editor.redibujar()
+        self.sync_detail()
+        return True
+
+    def _marquee(self, d):
+        editor = self.w.editor
+        y0, y1 = sorted((d["y0"], d.get("y1", d["y0"])))
+        lanes = {}
+        for lid, ly in self._lane_y.items():
+            if ly <= y1 and ly + 34 >= y0:
+                lanes[lid] = self._visible_parts_between(lid, d["t0"], d["t1"])
+        if not lanes:
+            lanes[d["lid"]] = self._visible_parts_between(d["lid"], d["t0"], d["t1"])
+        lid, ids = edits.marquee_select(lanes, d["t0"], d["t1"])
+        if not ids:
+            self.clear_selection(d["lid"])
+            editor.status("marquesina vacía")
+            return
+        self.select([(lid, iid, 0) for iid in ids])
+        layer, _ = self.find(lid)
+        editor.status(f"{len(ids)} item(s) seleccionados en «{layer['name']}»"
+                      + (" (varios carriles: se eligió el que tenía más)" if len(lanes) > 1 else ""))
+
+    def _item_color(self, layer, item):
+        return ({"silence": "#527cad", "ai": "#9471bd", "user": "#c58e43"}.get(item.get("origin"))
+                or layer["color"])
+
+    # ---- escrituras en lote: UNA escritura por documento, UNA entrada de deshacer ----
+    def persist_many(self, lid, items, *, delete=False, label=None):
+        """Valida todos los items, aplica todo en una copia del documento, escribe una
+        vez, refresca una vez y empuja una sola entrada al historial (§8). Si uno
+        falla, no se escribe ninguno."""
+        if self.w.worker and self.w.worker.is_alive():
+            raise ValueError("espera a que termine la operación del proyecto")
+        items = [copy.deepcopy(i) for i in items]
+        if not items:
+            return []
+        if label is None:
+            label = ("borrar" if delete else "editar") + f" {len(items)} items"
+        duration = self.store.master["media"]["duration"]
+        for item in items:
+            layers.validate_items([dict(item, parent_id=None)], duration, allow_points=lid == "autor")
+            item["edited"] = True
+            if lid in ("autor", "recortes", "bloques") and len(item["ranges"]) != 1:
+                raise ValueError("esta capa admite un rango por item")
+        if lid == "bloques":
+            raise ValueError("los bloques no admiten operaciones en lote (cobertura continua)")
+
+        def do():
+            if lid == "autor":
+                reg = self.w.editor.reg
+                marks = copy.deepcopy(reg.marcas)
+                by_id = {m["id"]: m for m in marks}
+                for item in items:
+                    mark = by_id.get(item["item_id"])
+                    if mark is None:
+                        continue
+                    if delete:
+                        marks.remove(mark)
+                        continue
+                    a, b = item["ranges"][0]["t_ini"], item["ranges"][0]["t_fin"]
+                    decision = {"accepted": "incluir", "disabled": "excluir"}.get(item["state"])
+                    if mark["tipo"] == "punto" and a == b:
+                        mark.update(t=a, prompt=item["comment"] or None, label=item["label"])
+                    else:
+                        if mark["tipo"] == "punto":
+                            mark.pop("t", None)
+                            mark["tipo"] = "region"
+                        mark.update(t_ini=a, t_fin=b, decision=decision, prompt=item["comment"] or None,
+                                    label=item["label"])
+                reg.reemplazar(marks)
+            elif lid == "recortes":
+                document = copy.deepcopy(self.w.trims)
+                by_id = {c["cut_id"]: c for c in document["cuts"]}
+                for item in items:
+                    cut = by_id.get(item["item_id"])
+                    if cut is None:
+                        continue
+                    if delete:
+                        document["cuts"].remove(cut)
+                        continue
+                    part = item["ranges"][0]
+                    cut.update(t_ini=part["t_ini"], t_fin=part["t_fin"], reason=item["comment"],
+                               enabled=item["state"] != "disabled",
+                               accepted=item["state"] == "accepted", edited=True)
+                if not delete:
+                    editorial_trims.coalesce(document)
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._review_stale = True
+                self.w._reindex_trims()
+                self.w._refresh_trims_status()
+            else:
+                layer = copy.deepcopy(self.store.layers[lid])
+                if delete:
+                    removed = {i["item_id"] for i in items}
+                    while True:
+                        children = {i["item_id"] for i in layer["items"] if i.get("parent_id") in removed}
+                        if children <= removed:
+                            break
+                        removed |= children
+                    layer["items"] = [i for i in layer["items"] if i["item_id"] not in removed]
+                    layer["deleted_item_ids"] = sorted(set(layer.get("deleted_item_ids", [])) | removed)
+                else:
+                    by_id = {i["item_id"]: i for i in items}
+                    layer["items"] = [by_id.get(i["item_id"], i) for i in layer["items"]]
+                self.store.save(layer)
+        self.transact(label, [self._lane_doc(lid)], do)
+        if delete:
+            self.clear_selection(lid)
+        else:
+            self.select([(lid, i["item_id"], 0) for i in items],
+                        primary=self.selected if self.selected and self.selected[0] == lid else None)
+        self._after_write()
+        return items
+
+    def apply_box(self, lid, a, b, *, subtract=False):
+        """Herramienta Corte: caja que crea/estira/funde (o resta con Shift) en UNA
+        escritura del documento del carril (§7)."""
+        if lid == "bloques":
+            raise ValueError("en «Bloques» la herramienta Corte solo mueve límites (arrastra un borde)")
+        layer, _ = self.find(lid)
+        parts = self._parts(lid)
+        ops = edits.box_subtract(parts, a, b) if subtract else edits.box_add(parts, a, b)
+        if not ops:
+            self.w.editor.status("la caja no toca ningún item")
+            return None
+        label = ("restar " if subtract else "dibujar ") + f"caja en «{layer['name']}»"
+        created = []
+
+        def do():
+            if lid == "recortes":
+                document = copy.deepcopy(self.w.trims)
+                by_id = {c["cut_id"]: c for c in document["cuts"]}
+                actor = None
+                for op in ops:
+                    if op[0] == "create":
+                        cut = editorial_trims.add_cut(document, op[1], op[2], origin="user", edited=True)
+                        created.append(cut["cut_id"])
+                        actor = cut["cut_id"]
+                    elif op[0] == "update":
+                        by_id[op[1]].update(t_ini=op[2], t_fin=op[3], edited=True)
+                        actor = op[1]
+                    elif op[0] == "delete":
+                        document["cuts"].remove(by_id[op[1]])
+                    elif op[0] == "split":
+                        cut = by_id[op[1]]
+                        cut.update(t_ini=op[2][0], t_fin=op[2][1], edited=True)
+                        twin = editorial_trims.add_cut(document, op[3][0], op[3][1], origin=cut["origin"],
+                                                       reason=cut.get("reason", ""), enabled=cut["enabled"],
+                                                       accepted=cut.get("accepted", False), edited=True)
+                        if cut.get("lane"):
+                            twin["lane"] = cut["lane"]
+                    elif op[0] == "merge":
+                        survivor = by_id[op[1]]
+                        others = [by_id[i] for i in op[2]]
+                        survivor.update(t_ini=op[3], t_fin=op[4], edited=True,
+                                        reason=editorial_trims._join_reasons(survivor.get("reason"),
+                                                                             *(c.get("reason") for c in others)))
+                        for other in others:
+                            document["cuts"].remove(other)
+                        actor = op[1]
+                if not subtract:
+                    editorial_trims.coalesce(document, actor_id=actor)
+                editorial_trims.save_document(self.w.trims_path, document)
+                self.w.trims = document
+                self.w._review_stale = True
+                self.w._reindex_trims()
+                self.w._refresh_trims_status()
+            elif lid == "autor":
+                reg = self.w.editor.reg
+                marks = copy.deepcopy(reg.marcas)
+                by_id = {m["id"]: m for m in marks}
+                from datetime import datetime, timezone
+                next_id = reg.next_id
+                def new_mark(x, y_, base=None):
+                    nonlocal next_id
+                    mark = {"id": f"m{next_id:04d}", "tipo": "region", "t_ini": round(x, 3),
+                            "t_fin": round(y_, 3), "decision": (base or {}).get("decision"),
+                            "prompt": (base or {}).get("prompt"),
+                            "creado": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+                    if base and base.get("label"):
+                        mark["label"] = base["label"]
+                    next_id += 1
+                    marks.append(mark)
+                    created.append(mark["id"])
+                    return mark
+                for op in ops:
+                    if op[0] == "create":
+                        new_mark(op[1], op[2])
+                    elif op[0] == "update":
+                        by_id[op[1]].update(t_ini=op[2], t_fin=op[3])
+                    elif op[0] == "delete":
+                        marks.remove(by_id[op[1]])
+                    elif op[0] == "split":
+                        mark = by_id[op[1]]
+                        mark.update(t_ini=op[2][0], t_fin=op[2][1])
+                        new_mark(op[3][0], op[3][1], base=mark)
+                    elif op[0] == "merge":
+                        survivor = by_id[op[1]]
+                        others = [by_id[i] for i in op[2]]
+                        survivor.update(t_ini=op[3], t_fin=op[4],
+                                        prompt=editorial_trims._join_reasons(
+                                            survivor.get("prompt"), *(m.get("prompt") for m in others)) or None)
+                        for other in others:
+                            marks.remove(other)
+                reg.reemplazar(marks)
+            else:
+                layer_doc = copy.deepcopy(self.store.layers[lid])
+                by_id = {i["item_id"]: i for i in layer_doc["items"]}
+                removed = set()
+                for op in ops:
+                    if op[0] == "create":
+                        item = layers.new_item(op[1], op[2])
+                        layer_doc["items"].append(item)
+                        created.append(item["item_id"])
+                    elif op[0] == "update":
+                        by_id[op[1]]["ranges"] = [dict(t_ini=op[2], t_fin=op[3])]
+                        by_id[op[1]]["edited"] = True
+                    elif op[0] == "delete":
+                        layer_doc["items"].remove(by_id[op[1]])
+                        removed.add(op[1])
+                    elif op[0] == "split":
+                        item = by_id[op[1]]
+                        item["ranges"] = [dict(t_ini=op[2][0], t_fin=op[2][1])]
+                        item["edited"] = True
+                        twin = {**copy.deepcopy(item), "item_id": edits.new_item_id(),
+                                "ranges": [dict(t_ini=op[3][0], t_fin=op[3][1])]}
+                        layer_doc["items"].insert(layer_doc["items"].index(item) + 1, twin)
+                    elif op[0] == "merge":
+                        survivor = by_id[op[1]]
+                        others = [by_id[i] for i in op[2]]
+                        survivor["ranges"] = [dict(t_ini=op[3], t_fin=op[4])]
+                        survivor["edited"] = True
+                        survivor["comment"] = editorial_trims._join_reasons(
+                            survivor.get("comment"), *(i.get("comment") for i in others))
+                        for other in others:
+                            layer_doc["items"].remove(other)
+                            removed.add(other["item_id"])
+                if removed:
+                    layer_doc["deleted_item_ids"] = sorted(set(layer_doc.get("deleted_item_ids", [])) | removed)
+                layers.validate_items(layer_doc["items"], self.store.master["media"]["duration"])
+                self.store.save(layer_doc)
+        self.transact(label, [self._lane_doc(lid)], do)
+        survivors = [op[1] for op in ops if op[0] in ("update", "merge")] + created
+        if survivors:
+            self.select([(lid, survivors[-1], 0)])
+        else:
+            self.clear_selection(lid)
+        self._after_write()
+        # crear en una capa de PEDIDOS abre el diálogo con el foco en el pedido (§10);
+        # en un carril de recortes queda creado sin diálogo
+        if created and lid not in ("recortes", "autor") and self.store.layers.get(lid, {}).get("kind") == "user":
+            self.edit_dialog(focus="comment")
+        return ops
+
+    def nudge_selection(self, frames):
+        """Flechas con varios seleccionados / Alt+flechas: mueve el conjunto ±n
+        fotogramas (una escritura) y el playhead lo sigue."""
+        import editorial_nav
+        items = self.selected_items()
+        if not items:
+            raise ValueError("selecciona un item del timeline")
+        lid = items[0][0]
+        fps = (self.w.info.get("video") or {}).get("fps") if self.w.info else None
+        delta = frames * editorial_nav.frame_step(fps)
+        duration = self.store.master["media"]["duration"]
+        lo = min(r["t_ini"] for _, i, _ in items for r in i["ranges"])
+        hi = max(r["t_fin"] for _, i, _ in items for r in i["ranges"])
+        delta = max(-lo, min(delta, duration - hi))
+        batch = []
+        for _, item, _ in items:
+            item["ranges"] = [{**r, "t_ini": round(r["t_ini"] + delta, 3), "t_fin": round(r["t_fin"] + delta, 3)}
+                              for r in item["ranges"]]
+            batch.append(item)
+        primary = self.selected
+        self.persist_many(lid, batch, label=f"empujar {len(batch)} item(s)")
+        if primary and primary[1]:
+            self.selected = primary
+        first = next((i for i in batch if primary and i["item_id"] == primary[1]), batch[0])
+        self.w.editor._mover_playhead(first["ranges"][0]["t_ini"])
+        return True
+
+    def batch(self, action):
+        """X / A / Supr sobre el conjunto seleccionado: una escritura, una entrada."""
+        items = self.selected_items()
+        if len(items) < 2:
+            return False
+        lid = items[0][0]
+        if action == "edit.delete":
+            self.persist_many(lid, [i for _, i, _ in items], delete=True,
+                              label=f"borrar {len(items)} items")
+            return True
+        states = [i["state"] for _, i, _ in items]
+        new = edits.batch_toggle(states) if action == "edit.toggle" else edits.batch_accept(states)
+        for _, item, _ in items:
+            item["state"] = new
+        verb = {"disabled": "desactivar", "accepted": "aceptar", "proposed": "activar"}[new]
+        if action == "edit.accept" and new == "proposed":
+            verb = "quitar aceptación a"
+        self.persist_many(lid, [i for _, i, _ in items], label=f"{verb} {len(items)} items")
         return True
 
     def persist(self, lid, item, *, create=False, delete=False, label=None):
@@ -512,7 +1057,10 @@ class LayersController:
             else:
                 layer["items"] = [item if i["item_id"] == item["item_id"] else i for i in layer["items"]]
             self.store.save(layer)
-        self.selected = None if delete else (lid, item["item_id"], 0)
+        if delete:
+            self.clear_selection(lid)
+        else:
+            self.select([(lid, item["item_id"], 0)])
         self._after_write()
         return item
 
@@ -683,6 +1231,41 @@ class LayersController:
             return self.undo()
         if action == "edit.redo":
             return self.undo(redo=True)
+        if action == "tools.toggle_cut":
+            self.set_tool("select" if self.tool == "cut" else "cut")
+            return True
+        if action == "tools.select":
+            self.set_tool("select")
+            return True
+        if action == "tools.select_all":
+            return self.select_all()
+        multi = len(self.selection) > 1
+        if multi and action in ("edit.toggle", "edit.accept", "edit.delete"):
+            try:
+                return self.batch(action)
+            except Exception as error:
+                editor.status(f"⚠ {error}")
+                return True
+        if multi and action in ("nav.step_prev", "nav.step_next", "nav.step_prev_5", "nav.step_next_5"):
+            # con varios seleccionados las flechas mueven el conjunto (§3); Shift ±10
+            frames = (-1 if "prev" in action else 1) * (10 if action.endswith("_5") else 1)
+            try:
+                return self.nudge_selection(frames)
+            except Exception as error:
+                editor.status(f"⚠ {error}")
+                return True
+        if multi and action.startswith("edit.nudge_"):
+            frames = (-1 if "prev" in action else 1) * (10 if action.endswith("_10") else 1)
+            try:
+                return self.nudge_selection(frames)
+            except Exception as error:
+                editor.status(f"⚠ {error}")
+                return True
+        if action == "edit.deselect" and self.selection:
+            self.clear_selection(self.selected[0] if self.selected else None)
+            editor.redibujar()
+            self.sync_detail()
+            return True
         editing = {"edit.split": self.split,
                    "edit.trim_start": lambda: self.trim_edge("start"),
                    "edit.trim_end": lambda: self.trim_edge("end"),
@@ -739,7 +1322,7 @@ class LayersController:
             elif action == "edit.edit":
                 self.edit_dialog()
             elif action == "edit.deselect":
-                self.selected = None
+                self.clear_selection()
                 self.w.editor.redibujar()
                 self.sync_detail()
             else:
@@ -769,18 +1352,55 @@ class LayersController:
 
     def leave(self, _e=None):
         self.w.editor.tl.delete("layer-tooltip")
+        self.w.editor.tl.delete("layer-edge")
+        self._hover_state = None
+        self._set_cursor("arrow")
         self.sync_detail()
 
     def hover(self, e):
+        """Hover: cursor y borde resaltado SOLO cuando cambia el estado (vacío / cuerpo /
+        borde / herramienta); el hit-test es el mismo `hit()` indexado que la barra de
+        detalle. El tooltip se redibuja por evento como antes."""
         if not self.store:
             return
-        canvas = self.w.editor.tl
+        editor = self.w.editor
+        canvas = editor.tl
         canvas.delete("layer-tooltip")
-        hit = self.w.editor._carril_en(e.y)
-        g = self.w.editor._tl_geo()
+        hit = editor._carril_en(e.y)
+        g = editor._tl_geo()
         hovered = None
+        item_hit = None
+        state = ("empty", None, None, None)
         if hit and g:
-            item_hit = self.hit(hit[0]["nombre"], e.x, g)
+            lid = hit[0]["nombre"]
+            item_hit = self.hit(lid, e.x, g)
+            if item_hit:
+                state = (item_hit[2], lid, item_hit[0]["item_id"], item_hit[1])
+            else:
+                state = ("lane", lid, None, None)
+        if self.drag is None and state != self._hover_state:
+            self._hover_state = state
+            ctrl = bool(int(getattr(e, "state", 0) or 0) & 0x4)
+            if state[0] == "empty":
+                cursor = "arrow"
+            elif self.tool == "cut" and not ctrl:
+                cursor = "crosshair"
+            elif state[0] in ("start", "end"):
+                cursor = "sb_h_double_arrow"
+            elif state[0] == "move":
+                cursor = "fleur"
+            else:
+                cursor = "arrow"
+            self._set_cursor(cursor)
+            canvas.delete("layer-edge")
+            if state[0] in ("start", "end") and (self.tool == "select" or ctrl):
+                item, index, mode = item_hit
+                part = item["ranges"][index]
+                x = editor._t2x(part["t_ini" if mode == "start" else "t_fin"], g)
+                y = self._lane_y.get(state[1], hit[1])
+                canvas.create_line(x, y + 10, x, y + 33, width=3, tags="layer-edge",
+                                   fill=self._lighter(self._item_color(self.find(state[1])[0], item)))
+        if hit and g:
             if item_hit:
                 item = item_hit[0]
                 hovered = (self.find(hit[0]["nombre"])[0], item)
@@ -803,7 +1423,11 @@ class LayersController:
         item_hit = self.hit(hit[0]["nombre"], e.x, g)
         if not item_hit:
             return
-        self.selected = (hit[0]["nombre"], item_hit[0]["item_id"], item_hit[1])
+        key = (hit[0]["nombre"], item_hit[0]["item_id"], item_hit[1])
+        if key not in self.selection:
+            self.select([key])
+        else:
+            self.selected = key
         self.sync_detail()
         menu = tk.Menu(self.w.editor.tl, tearoff=False)
         menu.add_command(label="Editar comentario y rangos", command=self.edit_dialog)
@@ -812,7 +1436,10 @@ class LayersController:
         menu.add_command(label="Ir al inicio", command=lambda: self.w.editor._set_playhead(item_hit[0]["ranges"][item_hit[1]]["t_ini"]))
         menu.tk_popup(e.x_root, e.y_root)
 
-    def edit_dialog(self):
+    def edit_dialog(self, focus=None):
+        """Diálogo del item. `focus="comment"`: el cursor queda en el campo del pedido
+        sin tocar el mouse (crear en una capa de pedidos, §10). Escape y Ctrl+Enter
+        guardan y cierran; cerrar con la X también guarda; el foco vuelve al timeline."""
         if not self.selected or not self.selected[1]:
             return
         lid, iid, _ = self.selected
@@ -823,6 +1450,7 @@ class LayersController:
         win.title("Editar item de capa")
         win.geometry("590x490")
         win.transient(self.w.f.winfo_toplevel())
+        self.window = win
         fields = {}
         for label, key, value in (("Etiqueta", "label", item["label"]),
                                    ("Tema padre (ID, vacío si es tema principal)", "parent_id", item.get("parent_id") or "")):
@@ -842,7 +1470,17 @@ class LayersController:
         state = ctk.CTkOptionMenu(win, values=["Propuesto", "Aceptado / incluir", "Desactivado / excluir"])
         state.set(dict(zip(layers.STATES, state.cget("values")))[item["state"]])
         state.pack(pady=8)
-        def save():
+        def close():
+            self.window = None
+            try:
+                win.destroy()
+            finally:
+                try:
+                    self.w.editor.tl.focus_set()
+                except tk.TclError:
+                    pass
+
+        def save(_e=None):
             try:
                 updated = copy.deepcopy(item)
                 updated.update(label=fields["label"].get(), parent_id=fields["parent_id"].get().strip() or None,
@@ -852,11 +1490,25 @@ class LayersController:
                 for line in ranges.get("1.0", "end-1c").splitlines():
                     a, b = line.replace("–", "-").split("-")
                     updated["ranges"].append(dict(t_ini=parse_time(a), t_fin=parse_time(b)))
-                self.persist(lid, updated, label="editar pedido")
-                win.destroy()
+                if updated != item:
+                    self.persist(lid, updated, label="editar pedido")
+                close()
             except Exception as error:
                 messagebox.showerror("No se guardó", str(error), parent=win)
-        ctk.CTkButton(win, text="Guardar", command=save).pack(pady=8)
+            return "break"
+        ctk.CTkButton(win, text="Guardar (Ctrl+Enter · Esc)", command=save).pack(pady=8)
+        win.bind("<Escape>", save)
+        win.bind("<Control-Return>", save)
+        win.protocol("WM_DELETE_WINDOW", save)
+        self._dialog_save = save
+        if focus == "comment":
+            target = getattr(comment, "_textbox", comment)
+            win.update_idletasks()
+            try:
+                target.focus_force()
+                win.after(60, target.focus_force)     # tras mapear la ventana
+            except tk.TclError:
+                pass
 
     def manage(self):
         if not self.store:
@@ -894,7 +1546,7 @@ class LayersController:
                 doc = "layer:" + layer["layer_id"]
                 if mode == "delete":
                     self.transact("borrar capa", [doc], lambda: self.store.delete(layer["layer_id"]))
-                    self.selected = None
+                    self.clear_selection()
                 else:
                     layer.update(name=name.get().strip() or layer["name"], color=color.get().strip())
                     self.transact("crear capa" if mode == "new" else "renombrar capa", [doc],

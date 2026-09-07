@@ -176,3 +176,67 @@ def split_chunk(plan: dict, chunk_id: str, t: float, *, min_len: float = 1.0) ->
         twin.pop(key, None)
     chunks.insert(index + 1, twin)
     return plan, twin
+
+
+# ---- gestos de la herramienta Corte (§7): caja que crea/estira o resta ----
+# `parts` = [(item_id, t_ini, t_fin)] de un carril (un rango por item). Devuelven
+# operaciones que el controlador aplica en UNA escritura:
+#   ("create", a, b) · ("update", id, a, b) · ("delete", id) · ("split", id, (a, t), (t, b))
+#   ("merge", survivor_id, [ids absorbidos], a, b)
+def _overlapping(parts, a, b):
+    return [(i, x, y) for i, x, y in parts if float(x) < b and float(y) > a]
+
+
+def box_add(parts, a, b, *, min_len: float = FRAME) -> list[tuple]:
+    """Caja [a, b]: si no toca ningún item nace uno; si toca uno se estira a la unión;
+    si toca varios se funden en el primero (unión de todos). Los que solo se tocan por
+    el borde siguen separados."""
+    a, b = sorted((float(a), float(b)))
+    if b - a < min_len:
+        raise ValueError("la caja es demasiado corta")
+    hits = sorted(_overlapping(parts, a, b), key=lambda p: (float(p[1]), float(p[2]), p[0]))
+    if not hits:
+        return [("create", round(a, 3), round(b, 3))]
+    lo = min(a, *(float(x) for _, x, _ in hits))
+    hi = max(b, *(float(y) for _, _, y in hits))
+    survivor = hits[0][0]
+    if len(hits) == 1:
+        return [("update", survivor, round(lo, 3), round(hi, 3))]
+    return [("merge", survivor, [i for i, _, _ in hits[1:]], round(lo, 3), round(hi, 3))]
+
+
+def box_subtract(parts, a, b, *, min_len: float = FRAME) -> list[tuple]:
+    """Shift + caja [a, b]: cada item que corte la caja se borra (cubierto entero), se
+    recorta (toca un solo borde) o se divide en dos (la caja queda estrictamente
+    dentro). Los restos más cortos que `min_len` se descartan con el item."""
+    a, b = sorted((float(a), float(b)))
+    if b - a < min_len:
+        raise ValueError("la caja es demasiado corta")
+    ops = []
+    for item_id, x, y in _overlapping(parts, a, b):
+        x, y = float(x), float(y)
+        left = (x, a) if a - x >= min_len else None
+        right = (b, y) if y - b >= min_len else None
+        if left and right:
+            ops.append(("split", item_id, (round(x, 3), round(a, 3)), (round(b, 3), round(y, 3))))
+        elif left:
+            ops.append(("update", item_id, round(x, 3), round(a, 3)))
+        elif right:
+            ops.append(("update", item_id, round(b, 3), round(y, 3)))
+        else:
+            ops.append(("delete", item_id))
+    return ops
+
+
+def marquee_select(lanes: dict, t0: float, t1: float) -> tuple[str | None, list[str]]:
+    """Marquesina: `lanes` = {lid: parts} de los carriles que el rectángulo cubre.
+    Selecciona en el carril con MÁS items dentro del intervalo (solo se seleccionan
+    items de un mismo carril). Devuelve (lid, [item_ids ordenados por tiempo])."""
+    t0, t1 = sorted((float(t0), float(t1)))
+    best, best_ids = None, []
+    for lid, parts in lanes.items():
+        hits = sorted(_overlapping(parts, t0, t1), key=lambda p: (float(p[1]), p[0]))
+        ids = list(dict.fromkeys(i for i, _, _ in hits))
+        if len(ids) > len(best_ids):
+            best, best_ids = lid, ids
+    return best, best_ids

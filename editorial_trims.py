@@ -802,3 +802,70 @@ def whole_plan(master: dict) -> dict:
             "chunks": [{"chunk_id": "completo", "t_ini": 0.0, "t_fin": round(duration, 3),
                         "title": master["project"]["name"], "summary": "", "confidence": 1.0,
                         "warnings": []}]}
+
+
+# ------------------------------------------------------- carriles y solapes --
+def cut_lane(cut: dict) -> str:
+    """Carril de un corte: el campo `lane` si existe; si no, derivado del origen
+    (`ai` → «ai», lo demás → «main»). Los archivos antiguos cargan sin migración."""
+    lane = cut.get("lane")
+    if lane:
+        return str(lane)
+    return "ai" if cut.get("origin") == "ai" else "main"
+
+
+def _join_reasons(*reasons) -> str:
+    seen, out = set(), []
+    for reason in reasons:
+        for piece in str(reason or "").split(" · "):
+            piece = piece.strip()
+            if piece and piece not in seen:
+                seen.add(piece)
+                out.append(piece)
+    return " · ".join(out)
+
+
+def coalesce(document: dict, *, lane: str | None = None, actor_id: str | None = None) -> list[dict]:
+    """Funde en UNO los cortes de un mismo carril que se solapan ESTRICTAMENTE
+    (`a.t_ini < b.t_fin and b.t_ini < a.t_fin`) y comparten estado `enabled` (fundir
+    un activo con uno desactivado cambiaría la unión que exporta). El ACTOR (el corte
+    recién creado o movido; sin actor, el más largo) impone `origin` y `accepted` y
+    conserva su `cut_id`; `reason` se concatena con « · » sin duplicados; la evidencia
+    de la AI se conserva si alguno la tenía. Los que solo se tocan por el borde no se
+    funden. Idempotente y O(n) sobre el carril ordenado. Muta `document` y devuelve
+    los cortes eliminados."""
+    lanes = {lane} if lane else {cut_lane(c) for c in document["cuts"]}
+    removed = []
+    for current in lanes:
+        for enabled in (True, False):
+            group = sorted((c for c in document["cuts"] if cut_lane(c) == current
+                            and bool(c["enabled"]) == enabled),
+                           key=lambda c: (c["t_ini"], c["t_fin"], c["cut_id"]))
+            clusters, cluster = [], []
+            for cut in group:
+                if cluster and cut["t_ini"] < max(c["t_fin"] for c in cluster):
+                    cluster.append(cut)
+                else:
+                    if len(cluster) > 1:
+                        clusters.append(cluster)
+                    cluster = [cut]
+            if len(cluster) > 1:
+                clusters.append(cluster)
+            for cluster in clusters:
+                actor = next((c for c in cluster if c["cut_id"] == actor_id), None)
+                if actor is None:
+                    actor = max(cluster, key=lambda c: (c["t_fin"] - c["t_ini"], c["cut_id"]))
+                others = [c for c in cluster if c is not actor]
+                actor["t_ini"] = round(min(c["t_ini"] for c in cluster), 3)
+                actor["t_fin"] = round(max(c["t_fin"] for c in cluster), 3)
+                actor["reason"] = _join_reasons(actor.get("reason"), *(c.get("reason") for c in others))
+                if not actor.get("evidence"):
+                    actor["evidence"] = next((dict(c["evidence"]) for c in others if c.get("evidence")), {})
+                actor["edited"] = True
+                actor["warnings"] = list(dict.fromkeys(
+                    w for c in [actor, *others] for w in (c.get("warnings") or [])))
+                for other in others:
+                    document["cuts"].remove(other)
+                    removed.append(other)
+    sort_cuts(document)
+    return removed

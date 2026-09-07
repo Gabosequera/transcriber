@@ -70,12 +70,14 @@ def main():
             app.update()
             g = workspace.editor._tl_geo()
             controller = workspace.layers
-            for phase, t in (("press", 2.5), ("motion", 3.5)):
-                event = SimpleNamespace(x=workspace.editor._t2x(t,g),y=0)
+            controller.set_tool("cut")                     # crear = caja con la herramienta Corte
+            for phase, t in (("press", 2.5), ("motion", 3.0), ("motion", 3.5)):
+                event = SimpleNamespace(x=workspace.editor._t2x(t,g),y=0,state=0)
                 controller.gesture(layer["layer_id"],phase,event,g,0)
             from unittest import mock
             with mock.patch.object(controller,"edit_dialog"):
                 controller.gesture(layer["layer_id"],"release",event,g,0)
+            controller.set_tool("select")
             saved=store.layers[layer["layer_id"]]
             assert len(saved["items"]) == 1
             item=copy_item=__import__('copy').deepcopy(saved['items'][0])
@@ -111,6 +113,7 @@ def main():
                 spin(lambda:any(l['kind']=='topics' for l in store.visible()))
                 topic=next(l for l in store.visible() if l['kind']=='topics')
                 assert len(topic['items'][0]['ranges'])==2
+                spin(lambda: not workspace.worker.is_alive())
                 topic['items'][0]['comment']='Recurrencia revisada a mano'
                 controller.persist(topic['layer_id'],topic['items'][0])
                 assert layers.LayerStore(store.root,data).layers[topic['layer_id']]['items'][0]['edited']
@@ -317,6 +320,171 @@ def main():
         assert history.peek_undo() is None or history.peek_undo().label != top_label
         assert any(c["t_ini"] == 0.2 for c in workspace.trims["cuts"])           # no se pisó
         controller.selected = None
+        # ---- herramientas de mouse y selección múltiple (Fase 6) ----
+        import copy as _copy
+        history.clear()
+        controller.set_tool("select")
+        ed._fit(); app.update()
+        g = ed._tl_geo()
+        lane_y = lambda lid: controller._lane_y[lid] + 20
+        x_of = lambda t: ed._t2x(t, g)
+        def mouse(phase, lid, x, y=None, state=0):
+            ev_ = NS(x=x, y=lane_y(lid) if y is None else y, state=state)
+            return controller.gesture(lid, phase, ev_, g, controller._lane_y[lid])
+        def drag(lid, xa, xb, *, ya=None, yb=None, state=0, before_release=None):
+            mouse("press", lid, xa, ya, state); mouse("motion", lid, xa + (2 if xb > xa else -2), ya, state)
+            mouse("motion", lid, xb, yb if yb is not None else ya, state)
+            if before_release:
+                before_release()
+            mouse("release", lid, xb, yb if yb is not None else ya, state)
+        dur = workspace.info["duracion"]
+        # tres recortes limpios para el lote
+        fresh = _copy.deepcopy(workspace.trims); fresh["cuts"] = []
+        for a in (1.0, 2.0, 3.0):
+            editorial_trims.add_cut(fresh, a, a + .5, origin="user", reason=f"lote {a}")
+        editorial_trims.save_document(trims_path, fresh); workspace.trims = fresh
+        workspace._reindex_trims(); controller.clear_selection(); ed.refrescar_layout(); app.update()
+        ids = [c["cut_id"] for c in workspace.trims["cuts"]]
+        # marquesina sobre los tres → X → los tres desactivados con UNA revisión nueva
+        drag("recortes", x_of(.8), x_of(3.7), ya=lane_y("recortes") - 8, yb=lane_y("recortes") + 8)
+        assert [k[1] for k in controller.selection] == ids, controller.selection
+        assert controller.selected[1] == ids[-1]
+        rev = workspace.trims["revision"]
+        assert ed._key_toplevel(ev(ed.tl, "x")) == "break"
+        assert all(not c["enabled"] for c in workspace.trims["cuts"]) and workspace.trims["revision"] == rev + 1
+        assert editorial_io.read_json(trims_path)["revision"] == rev + 1 and len(history) == 1
+        assert ed._key_toplevel(ev(ed.tl, "x")) == "break" and all(c["enabled"] for c in workspace.trims["cuts"])
+        assert ed._key_toplevel(ev(ed.tl, "a")) == "break" and all(c["accepted"] for c in workspace.trims["cuts"])
+        # arrastre del conjunto desde un item seleccionado → un solo guardado, todos se mueven igual
+        rev = workspace.trims["revision"]
+        drag("recortes", x_of(2.25), x_of(2.25 + 1.0))
+        starts = [round(c["t_ini"], 3) for c in workspace.trims["cuts"]]
+        assert starts == [2.0, 3.0, 4.0], starts
+        assert workspace.trims["revision"] == rev + 1 and len(controller.selection) == 3
+        # flechas con varios seleccionados: mueven el conjunto ±1 fotograma y el playhead sigue
+        assert ed._key_toplevel(ev(ed.tl, "Left")) == "break"
+        assert [round(c["t_ini"], 3) for c in workspace.trims["cuts"]] == [round(2 - step, 3), round(3 - step, 3), round(4 - step, 3)]
+        assert ed._key_toplevel(ev(ed.tl, "Right")) == "break"
+        assert [round(c["t_ini"], 3) for c in workspace.trims["cuts"]] == [2.0, 3.0, 4.0]
+        # Supr sobre el conjunto → una entrada; Ctrl+Z los devuelve
+        assert ed._key_toplevel(ev(ed.tl, "Delete")) == "break" and workspace.trims["cuts"] == []
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and len(workspace.trims["cuts"]) == 3
+        # borde de un item NO seleccionado: cursor de doble flecha y borde resaltado
+        controller.clear_selection(); ed.refrescar_layout(); app.update()
+        controller.leave()
+        end_x = x_of(2.5)
+        controller.hover(NS(x=end_x - 5, y=lane_y("recortes"), state=0))
+        assert ed.tl.cget("cursor") == "sb_h_double_arrow", ed.tl.cget("cursor")
+        assert ed.tl.find_withtag("layer-edge"), "borde no resaltado"
+        controller.hover(NS(x=x_of(2.25), y=lane_y("recortes"), state=0))
+        assert ed.tl.cget("cursor") == "fleur" and not ed.tl.find_withtag("layer-edge")
+        controller.hover(NS(x=x_of(2.75), y=lane_y("recortes"), state=0))
+        assert ed.tl.cget("cursor") == "arrow"
+        # arrastrar ese borde 40 px → solo t_fin cambia y la etiqueta flotante mostró el delta
+        label_seen = []
+        def check_label():
+            texts = [ed.tl.itemcget(i, "text") for i in ed.tl.find_withtag("layer-drag") if ed.tl.type(i) == "text"]
+            label_seen.extend(t for t in texts if "→" in t)
+        drag("recortes", end_x - 2, end_x + 38, before_release=check_label)
+        first = workspace.trims["cuts"][0]
+        assert first["t_ini"] == 2.0 and first["t_fin"] > 2.5, (first["t_ini"], first["t_fin"])
+        assert label_seen and "+" in label_seen[-1], label_seen
+        assert abs(first["t_fin"] - ed._x2t(end_x + 38, g)) < .02
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and workspace.trims["cuts"][0]["t_fin"] == 2.5
+        # item de 15 px: el cuerpo sigue moviéndose desde su centro
+        pxseg = g[1] / ed.view[1]
+        tiny = _copy.deepcopy(workspace.trims)
+        tc = editorial_trims.add_cut(tiny, 6.0, 6.0 + 15 / pxseg, origin="user")
+        editorial_trims.save_document(trims_path, tiny); workspace.trims = tiny; workspace._reindex_trims()
+        ed.refrescar_layout(); app.update()
+        cx = (x_of(tc["t_ini"]) + x_of(tc["t_fin"])) / 2
+        drag("recortes", cx, cx + 30)
+        moved_tiny = next(c for c in workspace.trims["cuts"] if c["cut_id"] == tc["cut_id"])
+        assert abs(moved_tiny["t_ini"] - (6.0 + 30 / pxseg)) < .02, moved_tiny["t_ini"]
+        assert abs((moved_tiny["t_fin"] - moved_tiny["t_ini"]) - 15 / pxseg) < 1e-3
+        # herramienta Corte (B): caja que pisa dos recortes → queda uno; Shift+caja dentro → dos con accepted
+        assert ed._key_toplevel(ev(ed.tl, "b")) == "break" and controller.tool == "cut"
+        assert workspace.tool_bar.get() == "Corte"
+        n_before = len(workspace.trims["cuts"])
+        drag("recortes", x_of(2.25), x_of(3.25))
+        merged = [c for c in workspace.trims["cuts"] if c["t_ini"] <= 2.25 and c["t_fin"] >= 3.25]
+        assert len(merged) == 1 and len(workspace.trims["cuts"]) == n_before - 1, [(c["t_ini"], c["t_fin"]) for c in workspace.trims["cuts"]]
+        assert merged[0]["accepted"] and "lote 1.0" in merged[0]["reason"] and "lote 2.0" in merged[0]["reason"], merged
+        assert controller.selected[1] == merged[0]["cut_id"]
+        drag("recortes", x_of(2.6), x_of(2.9), state=keymap.STATE_SHIFT)
+        pieces = sorted((c["t_ini"], c["t_fin"], c["accepted"]) for c in workspace.trims["cuts"] if 2.0 <= c["t_ini"] < 3.6)
+        assert (2.0, 2.6, True) in pieces and any(abs(a - 2.9) < 1e-6 and acc for a, b, acc in pieces), pieces
+        # caja en vacío → nace un recorte SIN diálogo; Ctrl+arrastre desde un item lo mueve
+        n_before = len(workspace.trims["cuts"])
+        with mock.patch.object(controller, "edit_dialog") as dialog:
+            drag("recortes", x_of(7.0), x_of(7.4))
+        assert len(workspace.trims["cuts"]) == n_before + 1 and not dialog.called
+        new_cut = next(c for c in workspace.trims["cuts"] if abs(c["t_ini"] - 7.0) < .02)
+        assert new_cut["origin"] == "user" and controller.selected[1] == new_cut["cut_id"]
+        drag("recortes", x_of(7.2), x_of(6.7), state=keymap.STATE_CONTROL)
+        moved_new = next(c for c in workspace.trims["cuts"] if c["cut_id"] == new_cut["cut_id"])
+        assert abs(moved_new["t_ini"] - 6.5) < .03, moved_new["t_ini"]
+        assert mouse("press", "recortes", x_of(5.0), state=keymap.STATE_CONTROL) is False   # Ctrl+vacío = scrub
+        controller.drag = None
+        # crear en una capa de PEDIDOS abre el diálogo con el foco en el pedido; Escape guarda
+        pedidos = layers.new_layer(store.master, "Pedidos corte")
+        controller.transact("crear capa", ["layer:" + pedidos["layer_id"]], lambda: store.save(pedidos))
+        ed.refrescar_layout(); app.update()
+        drag(pedidos["layer_id"], x_of(1.0), x_of(1.8))
+        spin(lambda: controller.window is not None and controller.window.winfo_exists())
+        spin(lambda: isinstance(app.focus_get(), __import__("tkinter").Text), timeout=5)
+        focused = app.focus_get()
+        assert focused is not None and focused.winfo_toplevel() is controller.window, focused
+        assert isinstance(focused, __import__("tkinter").Text), focused
+        focused.insert("1.0", "Busca el gancho")
+        controller._dialog_save()
+        app.update()
+        saved_item = store.layers[pedidos["layer_id"]]["items"][0]
+        assert saved_item["comment"] == "Busca el gancho" and controller.window is None
+        assert app.focus_get() is ed.tl
+        # V vuelve a Selección; Ctrl+Z deshace cada gesto entero
+        assert ed._key_toplevel(ev(ed.tl, "v")) == "break" and controller.tool == "select"
+        depth = len(history)
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break" and len(history) == depth - 1
+        assert store.layers[pedidos["layer_id"]]["items"][0]["comment"] == ""
+        assert ed._key_toplevel(ev(ed.tl, "z", ctrl)) == "break"
+        assert store.layers[pedidos["layer_id"]]["items"] == []
+        # medición: mover 120 recortes seleccionados (el hijo dura 8 s) ≤ 100 ms hasta redibujado
+        many = _copy.deepcopy(workspace.trims); many["cuts"] = []
+        for i in range(120):
+            editorial_trims.add_cut(many, round(.5 + i * .06, 3), round(.56 + i * .06, 3), origin="silence")
+        editorial_trims.save_document(trims_path, many); workspace.trims = many; workspace._reindex_trims()
+        ed.refrescar_layout(); app.update()
+        controller.select_all()
+        assert len(controller.selection) == 120
+        t0 = time.perf_counter()
+        assert ed.ejecutar("nav.step_prev")           # el conjunto se mueve −1 fotograma
+        app.update_idletasks()
+        cost_ms = (time.perf_counter() - t0) * 1000
+        assert all(abs(c["t_ini"] - (round(.5 + i * .06, 3) - step)) < 1e-6 for i, c in enumerate(workspace.trims["cuts"]))
+        assert cost_ms < 100, f"mover 120 recortes: {cost_ms:.0f} ms"
+        print(f"  mover 120 recortes seleccionados: {cost_ms:.0f} ms (una escritura)", flush=True)
+        # hover con 5.000 recortes: el hit-test consulta el índice (bisect), no la lista entera
+        import random as _random
+        _random.seed(3)
+        dense = _copy.deepcopy(workspace.trims); dense["cuts"] = []
+        for _ in range(5000):
+            a = _random.uniform(0, dur - .08)
+            editorial_trims.add_cut(dense, a, a + .06, origin="silence")
+        workspace.trims = dense; workspace._reindex_trims(); controller.clear_selection(); ed.refrescar_layout(); app.update()
+        seen = []
+        original_parts = controller.visible_parts
+        controller.visible_parts = lambda layer, s, e_: (lambda r: (seen.append(len(r)), r)[1])(original_parts(layer, s, e_))
+        t0 = time.perf_counter()
+        for i in range(200):
+            controller.hover(NS(x=4 + (g[1] * i) // 200, y=lane_y("recortes"), state=0))
+        hover_ms = (time.perf_counter() - t0) * 1000 / 200
+        controller.visible_parts = original_parts
+        assert seen and max(seen) < 400, max(seen)
+        assert hover_ms < 30, f"hover con 5000 recortes: {hover_ms:.1f} ms"
+        print(f"  hover con 5000 recortes: {hover_ms:.2f} ms por evento; ≤{max(seen)} items consultados", flush=True)
+        workspace.trims = many; workspace._reindex_trims(); controller.clear_selection(); controller.leave()
+        ed.refrescar_layout(); app.update()
         # Un clip sin inferencia conserva el mismo editor de marcas y capas.
         raw=root/'sin-procesar.mkv'
         subprocess.run(['ffmpeg','-v','error','-i',str(source),'-map','0','-c','copy',

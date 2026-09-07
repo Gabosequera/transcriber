@@ -223,6 +223,32 @@ capas para la IA que corta. En `~/.codex/skills/clipear/` es un SYMLINK a la de
   (`_normalize_cut`, `add_cut`, `apply_silence_analysis` lo conservan; el adaptador
   lo muestra como ACEPTADO con borde verde; la exportación sigue mirando solo
   `enabled`; `trim-review.md` lo expone como «aceptado por el editor»).
+- **Herramientas de mouse y selección múltiple** (Fase 6, §7/§8): `LayersController.tool`
+  (`select`/`cut`; barra segmentada en la columna 4 del transporte de Automático; B
+  alterna, V vuelve a Selección). `hit()` consulta `visible_parts` (bisect) con
+  zonas de borde de 8 px (un tercio del ancho en items < 24 px); `hover()` cambia el
+  cursor (`arrow`/`fleur`/`sb_h_double_arrow`/`crosshair`) y el borde resaltado SOLO
+  cuando cambia el estado. `selection` (lista ordenada, un carril) + `selected`
+  primario (punto en el borde superior); `select/clear_selection/select_all`.
+  Gestos de Selección: click, Shift+click, marquesina (`marquee_select`: el carril
+  con más items), arrastre del conjunto con previsualización y `persist_many`, borde
+  con etiqueta flotante. Corte: caja → `box_add` (crear/estirar/fundir), Shift →
+  `box_subtract` (borrar/recortar/dividir), Ctrl+item mueve, Ctrl+vacío scrub;
+  `apply_box` aplica las operaciones en UNA escritura por documento y abre
+  `edit_dialog(focus="comment")` solo en capas de pedidos. `persist_many` valida todo,
+  escribe una vez y registra una entrada; X/A/Supr con varios usan `batch_toggle/
+  batch_accept`; con ≥ 2 seleccionados las flechas mueven el conjunto ±1 fotograma
+  (Shift ±10). `editorial_trims.coalesce(document, lane, actor_id)` funde solapes
+  estrictos del mismo carril (`cut_lane`: campo `lane` o derivado del origen) y del
+  mismo `enabled` — fundir un activo con uno desactivado cambiaría la unión que
+  exporta, así que no se hace; el actor impone origen y `accepted`, el motivo se
+  concatena con « · ». `edit_dialog`: Escape y Ctrl+Enter guardan, la X también, el
+  foco vuelve al timeline.
+- **hwaccel (Fase 5): probado, sin ganancia.** `-hwaccel d3d11va` sobre el VOD de
+  referencia (30 s desde 1800 s, 1280×410): ×1 2,69 s de pared frente a 2,24 s por
+  software; ×4 1,90 s frente a 2,00 s; primer frame ~1,00 s frente a ~0,85 s.
+  `auto` es peor aún. La decodificación por software ya va a 13× tiempo real; el
+  cuello es otro. No hay clave `preview_hwaccel`: se deja documentado.
 - **Apagado**: TODO pasa por `wizard._stop_preview()` (epoch de sesión `_preview_epoch`
   invalida callbacks tardíos; mata stream+prefetch+timers+audio). Lo llaman play/stop,
   cambio de video, nav fuera del paso 1 y cierre.
@@ -436,9 +462,14 @@ Diseño y prompt por fases en [diseno-navegacion-editor.md](diseno-navegacion-ed
 - **Fase 4 (hecha)** — edición sobre el item seleccionado (dividir, recortar
   inicio/fin, empujar, item anterior/siguiente, aceptar y aceptar-y-seguir) y
   deshacer/rehacer de todo lo que escribe el timeline, incluidas las importaciones.
-- **Pendientes:** Fase 5
-  hwaccel opcional, Fase 6 selección múltiple y herramientas de mouse, Fase 7 carriles
-  de la AI y lanes de `trims.json`.
+- **Fase 5 (probada, sin ganancia)** — hwaccel d3d11va: peor a ×1, igual a ×4, primer
+  frame más lento; queda `off` sin código (§3.1).
+- **Fase 6 (hecha)** — selección múltiple, herramientas Selección/Corte, marquesina,
+  arrastre del conjunto, recorte por bordes con afordancia, `persist_many`,
+  `coalesce`. Medido en el smoke (medio sintético de 8 s): mover 120 recortes
+  seleccionados en una escritura, 43 ms hasta redibujar; hover con 5.000 recortes
+  solapados, 2,2 ms por evento consultando ≤ 334 items del índice, nunca la lista entera.
+- **Pendiente:** Fase 7, carriles de la AI y lanes de `trims.json`.
 
 ### Timeline estable y panel ajustable — 2026-09-06 (0.3.2)
 

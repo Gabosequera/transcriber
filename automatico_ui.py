@@ -309,6 +309,13 @@ class AutomaticWorkspace:
         # las marcas que escribe el editor (M, I/O, X, prompt, arrastre) entran al
         # historial de deshacer del proyecto (diseño §4)
         self.editor.transaccion = self.layers.transact
+        # barra de herramientas (§7) en la columna libre del transporte: Selección / Corte
+        self.tool_bar = ctk.CTkSegmentedButton(
+            self.editor.fr_transporte, values=["Selección", "Corte"], height=26,
+            font=ctk.CTkFont(size=11), command=self._tool_picked)
+        self.tool_bar.set("Selección")
+        self.tool_bar.grid(row=0, column=4, padx=(10, 0), sticky="e")
+        self.layers.on_tool_change = lambda tool: self.tool_bar.set("Corte" if tool == "cut" else "Selección")
         # detalle del item de capa bajo el mouse / seleccionado: barra de altura FIJA
         # en la fila libre del editor (entre el timeline y el status) — nada de
         # escribirlo en el status, cuyo wrap movía timeline y preview con cada hover
@@ -447,6 +454,10 @@ class AutomaticWorkspace:
             row=16, column=0, sticky="ew", padx=14, pady=5)
         ctk.CTkButton(panel, text="Analizar temas (dos pasadas)", command=self._prepare_topics).grid(
             row=17, column=0, sticky="ew", padx=14, pady=5)
+
+    def _tool_picked(self, label):
+        self.layers.set_tool("cut" if label == "Corte" else "select")
+        self.editor.tl.focus_set()
 
     # ---- formato de salida ----
     def _export_format(self) -> str:

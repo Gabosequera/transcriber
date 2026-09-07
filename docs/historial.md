@@ -567,3 +567,27 @@ exportación sigue con `enabled`). Smoke Tk: S, [, ], Alt+→, A, Shift+A, pedid
 marca y prompt, Ctrl+Z ×3, Ctrl+R ×3, deshacer todo hasta la tumba y rehacer
 todo, Ctrl+Z en un Entry no toca el proyecto, cambio externo → entrada
 descartada sin pisar. 106 tests.
+
+**Fase 5 — hwaccel, probada y descartada.** `d3d11va` empeora ×1 (2,69 s frente a
+2,24 s por 30 s de medio) y el primer frame (~1,0 s frente a ~0,85 s) y no cambia
+×4: queda `off` sin código, con los números en `mediciones-reproductor.md`.
+
+**Fase 6 — selección múltiple y herramientas de mouse.** Aritmética pura en
+`editorial_edits.py` (`box_add` crea/estira/funde, `box_subtract` borra/recorta/
+divide, `marquee_select`) y `editorial_trims.coalesce` (solapes estrictos del
+mismo carril y del mismo `enabled` se funden con reglas de actor; la unión que
+exporta no cambia, probado con documentos aleatorios). `LayersController`: hit-test
+por `visible_parts` con zonas de borde de 8 px (un tercio en items estrechos),
+cursor y borde resaltado solo cuando cambia el estado, `selection` + primario,
+herramientas Selección (click, Shift+click, marquesina, arrastre del conjunto con
+previsualización, recorte por bordes con etiqueta flotante) y Corte (caja, Shift
+resta, Ctrl mueve, Ctrl+vacío scrub), `persist_many` (una escritura, una entrada
+de deshacer), X/A/Supr en lote, flechas que mueven el conjunto, barra Selección/
+Corte en el transporte, `edit_dialog(focus="comment")` con Escape/Ctrl+Enter/X
+que guardan. Smoke Tk: marquesina de 3 → X → una revisión; arrastre del conjunto
+→ un guardado; caja sobre dos → uno; Shift+caja → dos con `accepted`; Ctrl+arrastre
+mueve; cursor `sb_h_double_arrow` y borde resaltado a 5 px del fin de un recorte
+no seleccionado; arrastrar ese borde solo cambia `t_fin` y muestra el delta; un
+item de 15 px se mueve desde el centro; crear en una capa de pedidos abre el
+diálogo con el foco en el pedido; Ctrl+Z deshace cada gesto entero. Mover 120
+recortes: 43 ms; hover con 5.000 recortes: 2,2 ms. 112 tests.

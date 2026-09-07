@@ -73,6 +73,20 @@ Cambio de velocidad durante la reproducción (tecla → primer frame de la sesi�
 nuevа): 993–1053 ms, mediana 1,04 s = 150 ms de debounce + el primer frame de una
 sesión nueva. No cumple los ≤ 400 ms del diseño §5; es el mismo coste que un seek.
 
+## Decodificación por hardware (Fase 5): probada, sin ganancia
+
+`-hwaccel d3d11va` antes de `-i` en el stream del preview, mismo VOD, 30 s desde
+1800 s a 1280×410 (sonda `ffmpeg` directa, sin Tk):
+
+| Modo | ×1 pared | ×1 primer frame | ×4 pared | ×4 primer frame |
+|---|---:|---:|---:|---:|
+| software | 2,24 s | 0,85 s | 2,00 s | 0,84 s |
+| d3d11va | 2,69 s | 1,00 s | 1,90 s | 1,00 s |
+| auto | 2,85 s | 1,06 s | 2,06 s | 1,03 s |
+
+Por software el decodificador ya va a 13× tiempo real; el hardware empeora ×1 y el
+primer frame y no cambia ×4. Se deja `off` y sin código.
+
 ## Reproducir
 
 Ejecutar `tools/benchmark_preview.py --source <VOD> --output <resultado.json>` con el
