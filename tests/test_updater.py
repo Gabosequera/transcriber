@@ -75,6 +75,7 @@ class BundleTests(unittest.TestCase):
         with zipfile.ZipFile(installer) as bundle:
             names = set(bundle.namelist())
         self.assertIn("tools/verify_windows_install.py", names)
+        self.assertIn("tools/install_repo_component.py", names)
         self.assertNotIn("capturar-ui.sh", names)
         self.assertFalse(any(name.startswith("capturas/") for name in names))
 

@@ -10,6 +10,7 @@ from importlib.util import find_spec
 from pathlib import Path
 
 import numpy as np
+from torch_worker import isolated
 
 
 AUDEERING = "audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim"
@@ -135,6 +136,7 @@ def _window_offsets(length: int, hop: int,
     return sorted(offsets)
 
 
+@isolated
 def extract_arousal(audio: str | Path, *, window_seconds: float = 4.0,
                     hop_seconds: float = 2.0, batch_size: int = 8,
                     speech_intervals: list[tuple[float, float]] | None = None,

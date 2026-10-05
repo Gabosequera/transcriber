@@ -394,6 +394,7 @@ class AutomaticWorkspace:
         self.step_checks = {}
         stages = (("extract", "Preparar pistas", False), ("whisper", "Whisper", False),
                   ("align", "Alineación MMS (timestamps)", True),
+                  ("diarization", "Separar hablantes (diarización)", True),
                   ("prosody", "Intensidad + emoción", True), ("laughter", "Risa", True),
                   ("master", "Metadata para AI externa", False))
         for row, (key, label, optional) in enumerate(stages, 1):
@@ -404,7 +405,8 @@ class AutomaticWorkspace:
                 check = ctk.CTkCheckBox(line, text=label, text_color="#c6cec9", height=22,
                                         checkbox_width=16, checkbox_height=16,
                                         font=ctk.CTkFont(size=12))
-                check.select()
+                if key != "diarization":
+                    check.select()
                 check.grid(row=0, column=0, sticky="ew")
                 self.step_checks[key] = check
             else:
@@ -415,9 +417,17 @@ class AutomaticWorkspace:
                                  font=ctk.CTkFont(size=9, weight="bold"))
             state.grid(row=0, column=1)
             self.stage_labels[key] = state
-        ctk.CTkLabel(options, text="Desmarca un paso para omitirlo en esta corrida.",
+        speaker_row = ctk.CTkFrame(options, fg_color="transparent")
+        speaker_row.grid(row=len(stages) + 1, column=0, sticky="ew", pady=3)
+        ctk.CTkLabel(speaker_row, text="Hablantes por pista", text_color=MUTED,
+                     font=ctk.CTkFont(size=11)).pack(side="left")
+        self.speaker_count_menu = ctk.CTkOptionMenu(speaker_row, values=["Auto"] + [str(n) for n in range(1, 9)],
+                                                   width=75, height=24)
+        self.speaker_count_menu.set("Auto")
+        self.speaker_count_menu.pack(side="right")
+        ctk.CTkLabel(options, text="Diarización local: configura Hugging Face en Ajustes.",
                      text_color=MUTED, anchor="w", font=ctk.CTkFont(size=10)).grid(
-                         row=len(stages) + 1, column=0, sticky="w", pady=(2, 0))
+                         row=len(stages) + 2, column=0, sticky="w", pady=(2, 0))
 
         self.progress = ctk.CTkProgressBar(panel, progress_color=ACCENT)
         self.progress.set(0)
@@ -924,6 +934,7 @@ class AutomaticWorkspace:
 
     def _run_options(self) -> dict:
         return {"model": self.model_menu.get(),
+                "num_speakers": self.speaker_count_menu.get(),
                 "steps": {key: bool(check.get()) for key, check in self.step_checks.items()}}
 
     def _build_track_controls(self, row, track, index):
@@ -1024,6 +1035,7 @@ class AutomaticWorkspace:
         self.output_entry.configure(state=state)
         self.open_project_button.configure(state=state)
         self.model_menu.configure(state=state)
+        self.speaker_count_menu.configure(state=state)
         for check in self.step_checks.values():
             check.configure(state=state)
         for button in (self.view_button, self.chunks_button, self.agent_button, self.accept_button,
@@ -1072,6 +1084,7 @@ class AutomaticWorkspace:
                                  if self.result else Path(self.info["path"]).stem), "tracks": tracks,
                 "transcription": {"model": options["model"], "language": "es", "device": "auto"},
                 "steps": options["steps"], "rebuild": rebuild,
+                "diarization": {"num_speakers": options["num_speakers"]},
                 "chunking": {"mode": "external"}}
         self.cancel = threading.Event()
         self.progress.set(0)
@@ -1105,6 +1118,7 @@ class AutomaticWorkspace:
     def _stage_group(step: str) -> str:
         for prefix, group in (("extract_", "extract"), ("whisper_", "whisper"),
                               ("align_", "align"), ("transcribe_", "align"),
+                              ("diarize_", "diarization"),
                               ("prosody_", "prosody"), ("laughter_", "laughter")):
             if step.startswith(prefix):
                 return group

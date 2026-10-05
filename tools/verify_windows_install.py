@@ -22,6 +22,7 @@ REQUIRED_IMPORTS = (
     "PIL",
     "psutil",
     "pydub",
+    "pyannote.audio",
     "pysentimiento",
     "requests",
     "silero_vad",
@@ -30,6 +31,25 @@ REQUIRED_IMPORTS = (
     "torchaudio",
     "transformers",
 )
+
+
+def verify_whisper_audio():
+    """Decode actual WAV/FLAC through Whisper; imports alone miss PyAV API changes."""
+    import tempfile
+    import numpy as np
+    import soundfile as sf
+    from faster_whisper.audio import decode_audio
+
+    waveform = (0.25 * np.sin(2 * np.pi * 440 * np.arange(3200) / 16000)).astype(np.float32)
+    with tempfile.TemporaryDirectory(prefix="transcriptor-audio-check-") as temporary:
+        for suffix in ("wav", "flac"):
+            path = Path(temporary) / f"sample.{suffix}"
+            sf.write(path, waveform, 16000, subtype="PCM_16")
+            decoded = decode_audio(str(path), sampling_rate=16000)
+            assert decoded.shape == waveform.shape, (suffix, decoded.shape)
+            assert np.isfinite(decoded).all(), suffix
+            assert np.max(np.abs(decoded - waveform)) < 0.001, suffix
+    print("Lectura de audio Whisper WAV/FLAC OK", flush=True)
 
 
 def verify_podcast_ui(window):
@@ -124,12 +144,16 @@ def verify(root: Path) -> None:
         "import importlib, sys; "
         f"sys.path.insert(0, {str(release)!r}); "
         f"mods={REQUIRED_IMPORTS!r}; "
-        "[importlib.import_module(name) for name in mods]; "
+        "[(print(f'Verificando {name}...', flush=True), importlib.import_module(name)) for name in mods]; "
         "import torch, torchaudio; "
         "assert hasattr(torchaudio.pipelines, 'MMS_FA'); "
         "torchaudio.functional.forced_align(torch.log_softmax(torch.randn(1, 5, 3), -1), torch.tensor([[1, 2]], dtype=torch.int32)); "
         f"assert torch.__version__.split('+')[0] == {expected_torch!r}, torch.__version__; "
         f"assert torch.version.cuda == {expected_cuda!r}, torch.version.cuda; "
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r}); "
+        "from verify_windows_install import verify_whisper_audio; "
+        "verify_whisper_audio(); "
+        "print('Verificando interfaz...', flush=True); "
         "import app, app_paths, core, hardware, updater; "
         "window=app.App(); "
         "window.update_idletasks(); "
@@ -151,7 +175,8 @@ def verify(root: Path) -> None:
         cwd=release,
         env=environment,
         check=True,
-        timeout=180,
+        # A cold Windows install can spend several minutes loading Torch DLLs.
+        timeout=600,
     )
     subprocess.run(
         [str(ffmpeg), "-version"],

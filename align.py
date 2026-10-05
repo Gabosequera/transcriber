@@ -20,6 +20,7 @@ API:  align_words(audio, words, log_cb=None) -> words con start/end corregidos.
 from __future__ import annotations
 
 import unicodedata
+from torch_worker import isolated
 
 _MODEL = _TOK = _ALN = None
 
@@ -62,6 +63,7 @@ def _norm(word: str) -> str:
     return "".join(c for c in w.lower() if ("a" <= c <= "z") or c == "'")
 
 
+@isolated
 def align_words(audio, words, *, batch=120, margin=0.5, log_cb=None,
                 progress_cb=None, cancel=None) -> list[dict]:
     """Devuelve una copia de `words` con start/end re-alineados. Procesa por lotes
@@ -125,6 +127,8 @@ def align_words(audio, words, *, batch=120, margin=0.5, log_cb=None,
                 newtimes[k] = (round(s[0].start * ratio + t0, 3),
                                round(s[-1].end * ratio + t0, 3))
         except Exception as e:
+            if dev.type == "cuda" and hardware.is_cuda_oom(e):
+                raise
             if log_cb:
                 log_cb(f"(lote {i}: alineación falló, conservo tiempos de whisper — {e})")
 

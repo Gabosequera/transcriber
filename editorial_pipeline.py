@@ -70,6 +70,10 @@ def _validate_spec(spec: dict, info: dict) -> dict:
         raise ValueError("los track_id deben ser únicos")
     import hardware
     transcription = spec.get("transcription") or {}
+    import diarization
+    diarization_options = spec.get("diarization") or {}
+    if not isinstance(diarization_options, dict):
+        raise ValueError("diarization debe ser un objeto")
     steps = spec.get("steps") or {}
     if not isinstance(steps, dict):
         raise ValueError("steps debe ser un objeto")
@@ -100,7 +104,10 @@ def _validate_spec(spec: dict, info: dict) -> dict:
             "align": bool(steps.get("align", transcription.get("align", True))),
             "laughter": bool(steps.get("laughter", True)),
             "prosody": bool(steps.get("prosody", True)),
+            "diarization": bool(steps.get("diarization", False)),
         },
+        "diarization": {"model": diarization.MODEL,
+                        "num_speakers": diarization.speaker_count(diarization_options.get("num_speakers"))},
         "chunk_count": spec.get("chunk_count"),
         "chunking": {
             "mode": chunking_mode,
@@ -125,6 +132,12 @@ def _preflight(steps: dict | None = None) -> None:
         missing.append("prosodia (torch + transformers + librosa)")
     if steps.get("laughter") and not laughter.available():
         missing.append("detector de risa LaughterSegmentation")
+    if steps.get("diarization"):
+        import diarization
+        if not diarization.available():
+            missing.append("diarización local (pyannote.audio; ejecuta setup-windows.bat)")
+        else:
+            diarization.check_access()
     if missing:
         raise RuntimeError("Faltan dependencias del perfil editorial: " + ", ".join(missing))
 
@@ -327,11 +340,15 @@ def _track_paths(root: Path, identifier: str) -> dict[str, Path]:
         "whisper_utterances": folder / "utterances.whisper.json",
         "aligned_words": folder / "words.aligned.json", "words": folder / "words.json",
         "utterances": folder / "utterances.json", "laughter": folder / "laughter.json",
+        "diarized_words": folder / "words.diarized.json",
+        "diarized_utterances": folder / "utterances.diarized.json",
+        "diarization": folder / "diarization.json",
         "arousal": folder / "arousal.json", "intensity": folder / "intensity.json",
     }
 
 
 STEP_LABELS = (("extract_", "Preparar pistas"), ("whisper_", "Whisper"),
+               ("diarize_", "Diarización"),
                ("transcribe_", "Whisper + MMS"), ("align_", "Alineación MMS"),
                ("prosody_", "Intensidad + emoción"), ("laughter_", "Risa"),
                ("master", "Metadata para AI externa"), ("chunk_plan", "Plan de chunks"),
@@ -364,7 +381,7 @@ def run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) -> 
     finally:
         # También liberar pesos/audio al cancelar o fallar; no cargar módulos nuevos.
         for name, method in (("align", "unload"), ("prosodia", "unload"),
-                             ("laughter", "unload"), ("audiocache", "clear")):
+                             ("laughter", "unload"), ("diarization", "unload"), ("audiocache", "clear")):
             module = sys.modules.get(name)
             if module is not None:
                 getattr(module, method)()
@@ -391,7 +408,8 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
     with _RunLock(root / ".work"):
         store = _StepStore(root, fingerprint, rebuild=resolved["rebuild"],
                            cancel=cancel, event_cb=event_cb)
-        per_track = 3 + int(steps_enabled["prosody"]) + int(steps_enabled["laughter"])
+        per_track = (3 + int(steps_enabled["prosody"]) + int(steps_enabled["laughter"])
+                     + int(steps_enabled["diarization"]))
         total_steps = len(resolved["tracks"]) * per_track + 1
         if resolved["chunking"]["mode"] != "external":
             total_steps += 2
@@ -498,6 +516,38 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
         import align
         align.unload()
 
+        # Identify speakers after alignment; cached Whisper/MMS outputs stay reusable.
+        for track in resolved["tracks"]:
+            identifier = track["track_id"]
+            paths = _track_paths(root, identifier)
+            if not steps_enabled["diarization"]:
+                store.skip(f"diarize_{identifier}", f"Diarización · {identifier}")
+                continue
+            outputs = [f"tracks/{identifier}/{name}" for name in
+                       ("words.diarized.json", "utterances.diarized.json", "diarization.json")]
+
+            def diarize_action(stage, progress, *, paths=paths, outputs=outputs):
+                import diarization
+                document = diarization.detect(
+                    paths["audio"], num_speakers=resolved["diarization"]["num_speakers"],
+                    cancel=cancel, progress_cb=progress,
+                    log_cb=lambda message: _emit(event_cb, "log", message=message))
+                words, utterances = diarization.assign_speakers(
+                    read_json(paths["aligned_words"]), read_json(paths["utterances"]), document)
+                for relative, value in zip(outputs, (words, utterances, document)):
+                    atomic_write_json(stage / relative, value)
+                return {"speakers": len({word["speaker_id"] for word in words if word["speaker_id"]}),
+                        "unknown_words": sum(word["speaker_id"] is None for word in words)}
+
+            store.run(f"diarize_{identifier}", f"Diarización · {identifier}",
+                      params={**resolved["diarization"], "assignment": "word-overlap/1"},
+                      dependencies=[f"extract_{identifier}", f"align_{identifier}"],
+                      outputs=outputs, action=diarize_action, validate=_validate_json)
+            completed()
+        if steps_enabled["diarization"]:
+            import diarization
+            diarization.unload()
+
         # 3. Arousal e intensidad (opcional). El modelo permanece cargado entre pistas.
         for track in resolved["tracks"]:
             identifier = track["track_id"]
@@ -509,7 +559,8 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
                 continue
 
             def prosody_action(stage, progress, *, identifier=identifier, paths=paths, outputs=outputs):
-                aligned_words = read_json(paths["aligned_words"])
+                aligned_words = read_json(paths["diarized_words"] if steps_enabled["diarization"]
+                                          else paths["aligned_words"])
                 regions = prosodia.speech_regions(aligned_words)
                 arousal = prosodia.extract_arousal(
                     paths["audio"], speech_intervals=regions, cancel=cancel,
@@ -533,7 +584,9 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
                       params={"arousal_window": 4.0, "arousal_hop": 2.0,
                               "arousal_scope": "speech-regions/2-emotions",
                               "intensity": "word-mms/1"},
-                      dependencies=[f"extract_{identifier}", f"align_{identifier}"],
+                      dependencies=[f"extract_{identifier}",
+                                    f"diarize_{identifier}" if steps_enabled["diarization"]
+                                    else f"align_{identifier}"],
                       outputs=outputs, action=prosody_action,
                       validate=_validate_json)
             completed()
@@ -573,10 +626,11 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
         # 5. Master y vistas. No reejecuta audio al cambiar el contrato de lectura.
         master_relative = f"{resolved['project_name']}.editorial.master.json"
         base_master_relative = f".work/{resolved['project_name']}.editorial.base.json"
-        view_outputs = [base_master_relative, "views/conversation.md", "views/conversation-signals.md",
+        view_outputs = [base_master_relative, "views/conversation.md", "views/conversation.readable.json", "views/conversation-signals.md",
                         "views/map.json", "views/chunk-agent-request.md"]
         kinds = ["align"] + (["prosody"] if steps_enabled["prosody"] else []) \
-            + (["laughter"] if steps_enabled["laughter"] else [])
+            + (["laughter"] if steps_enabled["laughter"] else []) \
+            + (["diarize"] if steps_enabled["diarization"] else [])
         dependencies = [f"{kind}_{track['track_id']}" for track in resolved["tracks"]
                         for kind in kinds]
 
@@ -588,15 +642,20 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
                 tracks.append({
                     "track_id": track["track_id"], "stream_index": track["stream_index"],
                     "label": track["label"], "offset": track["media_track"].get("delta", 0.0),
-                    "words_path": paths["words"] if prosody_on else paths["aligned_words"],
-                    "utterances_path": paths["utterances"],
+                    "words_path": (paths["words"] if prosody_on else
+                                   paths["diarized_words"] if steps_enabled["diarization"] else
+                                   paths["aligned_words"]),
+                    "utterances_path": (paths["diarized_utterances"] if steps_enabled["diarization"]
+                                        else paths["utterances"]),
+                    "diarization_path": paths["diarization"] if steps_enabled["diarization"] else None,
                     "laughter_path": paths["laughter"] if laughter_on else None,
                     "arousal_path": paths["arousal"] if prosody_on else None,
                     "intensity_path": paths["intensity"] if prosody_on else None,
                 })
             master = editorial_master.build_master(
                 media=info, tracks=tracks, project_name=resolved["project_name"],
-                fingerprint=fingerprint, transcription=resolved["transcription"],
+                fingerprint=fingerprint, transcription={**resolved["transcription"],
+                    "diarization": resolved["diarization"] if steps_enabled["diarization"] else None},
                 provenance={"pipeline": PIPELINE_VERSION},
             )
             editorial_master.write_package(stage, master)
@@ -608,7 +667,8 @@ def _run(spec: dict, *, event_cb=None, cancel: threading.Event | None = None) ->
             return {"tracks": len(tracks), "utterances": len(master["conversation"]["utterances"])}
 
         store.run("master", "Master + conversación global",
-                  params={"schema": "editorial-master/1", "podcast": 2, "steps": steps_enabled},
+                  params={"schema": "editorial-master/1", "podcast": 4, "steps": steps_enabled,
+                          "track_labels": {track["track_id"]: track["label"] for track in resolved["tracks"]}},
                   dependencies=dependencies, outputs=view_outputs, action=master_action)
         completed()
 

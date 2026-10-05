@@ -204,6 +204,8 @@ def transcribe(
     want_cues: bool = True,
     want_align: bool = False,   # corregir timestamps con alineación forzada (MMS)
     align_required: bool = False,
+    want_diarization: bool = False,
+    num_speakers: int | None = None,
     output_stem: str | None = None,
     progress_cb=None,   # progress_cb(fraccion: float 0..1, eta_seg: float|None)
     log_cb=None,        # log_cb(texto: str)
@@ -215,6 +217,9 @@ def transcribe(
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     stem = audio.stem if output_stem is None else output_stem.strip()
+    if want_diarization:
+        import diarization
+        diarization.check_access()
 
     def log(msg):
         if log_cb:
@@ -317,7 +322,8 @@ def transcribe(
         if want_srt:
             srt = []
             for i, s in enumerate(segments, 1):
-                srt += [str(i), f"{fmt_srt(s['start'])} --> {fmt_srt(s['end'])}", s["text"], ""]
+                label = f"[{s['speaker_id']}] " if s.get("speaker_id") else ""
+                srt += [str(i), f"{fmt_srt(s['start'])} --> {fmt_srt(s['end'])}", label + s["text"], ""]
             emit("srt", "\n".join(srt))
         if want_cues:
             dm, ds = int(total // 60), int(total % 60)
@@ -327,7 +333,8 @@ def transcribe(
                      "", "Anotá al lado de cada frase qué gráfica/escena entra y usá el",
                      "timestamp como `data-start` de la composición.", ""]
             for s in segments:
-                lines.append(f"- **[{fmt_cue(s['start'])}]** {s['text']}")
+                label = f"[{s['speaker_id']}] " if s.get("speaker_id") else ""
+                lines.append(f"- **[{fmt_cue(s['start'])}]** {label}{s['text']}")
             emit("cues.md", "\n".join(lines))
 
     emit_all()   # transcripción CRUDA primero → nunca te quedás sin nada si la alineación crashea
@@ -340,6 +347,22 @@ def transcribe(
                                          log_cb=log, progress_cb=progress_cb, cancel=cancel)
         if aligned_ok:
             emit_all()   # re-escribir todas las salidas con los tiempos corregidos
+
+    if want_diarization:
+        import diarization
+        try:
+            document = diarization.detect(audio, num_speakers=num_speakers, cancel=cancel,
+                                          log_cb=log,
+                                          progress_cb=lambda fraction: progress_cb(fraction, None)
+                                          if progress_cb else None)
+            words, segments = diarization.assign_speakers(words, segments, document)
+            emit_all()
+            emit("diarization.json", json.dumps(document, ensure_ascii=False, indent=2))
+        except InterruptedError:
+            log("Diarización cancelada; se conserva la transcripción previa.")
+            return None
+        finally:
+            diarization.unload()
 
     if progress_cb:
         progress_cb(1.0, 0.0)

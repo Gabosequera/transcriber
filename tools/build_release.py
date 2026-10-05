@@ -23,7 +23,8 @@ INSTALLER_ROOT_FILES = {
     "setup-windows.bat", "setup-windows.ps1", "run.bat", "diagnostico.bat",
     "configurar-github.bat", "configurar-github.ps1",
 }
-INSTALLER_TOOL_FILES = {"tools/verify_windows_install.py"}
+INSTALLER_TOOL_FILES = {"tools/verify_windows_install.py", "tools/install_repo_component.py",
+                        "tools/prepare_windows_python.ps1"}
 TORCH_VERSION = "2.8.0"
 TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 

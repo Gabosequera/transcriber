@@ -13,7 +13,7 @@ Uso:
 from __future__ import annotations
 
 # módulos que exponen un `unload()` (soltar su modelo cacheado). audiocache también se limpia.
-_MODULES = ["align", "metadata", "laughter", "escena_audio", "detect_breaths", "describir", "cara"]
+_MODULES = ["align", "metadata", "laughter", "diarization", "escena_audio", "detect_breaths", "describir", "cara"]
 
 
 def unload_all(log=None) -> None:

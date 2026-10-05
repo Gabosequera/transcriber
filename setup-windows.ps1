@@ -27,18 +27,15 @@ function Fetch-Repo($Owner, $Name, $Commit, $Sha256, $Marker, [switch]$Required)
     }
     $components = Join-Path $PSScriptRoot "shared\components"
     $zip = Join-Path $env:TEMP "transcriptor-$Name-$Commit.zip"
-    $expanded = Join-Path $env:TEMP "transcriptor-$Name-$Commit"
     try {
-        if (Test-Path $expanded) { Remove-Item $expanded -Recurse -Force }
         Invoke-WebRequest "https://github.com/$Owner/$Name/archive/$Commit.zip" `
             -Headers @{ "User-Agent" = "transcriptor-setup" } -UseBasicParsing -OutFile $zip
         $actual = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
         if ($actual -ne $Sha256.ToLowerInvariant()) { throw "SHA-256 incorrecto para $Name" }
-        Expand-Archive -Path $zip -DestinationPath $expanded -Force
-        $source = Get-ChildItem $expanded -Directory | Select-Object -First 1
         $target = Join-Path $components $Name
-        if (Test-Path $target) { Remove-Item $target -Recurse -Force }
-        Move-Item $source.FullName $target
+        # Expand-Archive de Windows PowerShell falla con las rutas largas de este ZIP.
+        & $bootstrapPython (Join-Path $PSScriptRoot "tools\install_repo_component.py") $zip $target $Marker
+        Assert-Ok "No se pudo extraer $Name"
         Write-Host "   - $Name descargado y verificado." -ForegroundColor Green
     } catch {
         $message = "No se pudo preparar ${Name}: $($_.Exception.Message)"
@@ -46,7 +43,6 @@ function Fetch-Repo($Owner, $Name, $Commit, $Sha256, $Marker, [switch]$Required)
         Write-Host "   [aviso] $message" -ForegroundColor DarkYellow
     } finally {
         if (Test-Path $zip) { Remove-Item $zip -Force }
-        if (Test-Path $expanded) { Remove-Item $expanded -Recurse -Force }
     }
 }
 
@@ -88,15 +84,19 @@ if (-not (Test-Path $uv)) {
     Write-Host "[1/8] uv ya esta." -ForegroundColor Green
 }
 
-# 2. Python administrado por uv y entorno bootstrap sin dependencias pesadas.
+# 2. Python oficial firmado: Smart App Control puede bloquear los builds de uv.
 Write-Host "[2/8] Preparando Python 3.13 y bootstrap..." -ForegroundColor Yellow
-& $uv python install 3.13 --no-bin
-Assert-Ok "No se pudo instalar Python 3.13"
+$officialPython = & (Join-Path $PSScriptRoot "tools\prepare_windows_python.ps1") -Root $PSScriptRoot
 $bootstrap = Join-Path $PSScriptRoot ".bootstrap"
 $bootstrapPython = Join-Path $bootstrap "Scripts\python.exe"
-if (-not (Test-Path $bootstrapPython)) {
-    & $uv venv --python 3.13 $bootstrap
-    Assert-Ok "No se pudo crear el entorno bootstrap"
+& $officialPython -m venv --upgrade --without-pip $bootstrap
+Assert-Ok "No se pudo preparar el entorno bootstrap"
+# Reorientar los runtimes existentes sin borrar sus paquetes ni descargar modelos.
+foreach ($runtime in (Get-ChildItem (Join-Path $PSScriptRoot "runtimes") -Directory -ErrorAction SilentlyContinue)) {
+    if (Test-Path (Join-Path $runtime.FullName "pyvenv.cfg")) {
+        & $officialPython -m venv --upgrade --without-pip $runtime.FullName
+        Assert-Ok "No se pudo reparar el runtime $($runtime.Name)"
+    }
 }
 & $bootstrapPython -c "import tkinter; tkinter.Tk().destroy(); print('tkinter OK')"
 Assert-Ok "El Python bootstrap no incluye Tkinter"

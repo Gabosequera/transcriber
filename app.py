@@ -626,10 +626,32 @@ class App(ctk.CTk):
         from keymap_ui import KeymapSettings
         self.keymap_settings = KeymapSettings(wrap, row=7, padx=6, pady=(0, 12))
 
+        hf = ctk.CTkFrame(wrap)
+        hf.grid(row=8, column=0, sticky="ew", **pad)
+        hf.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(hf, text="Diarización local · Hugging Face",
+                     font=ctk.CTkFont(size=14, weight="bold")).grid(
+                         row=0, column=0, columnspan=2, sticky="w", padx=12, pady=(10, 4))
+        self.hf_token_entry = ctk.CTkEntry(hf, show="•", placeholder_text="Token de lectura de Hugging Face")
+        self.hf_token_entry.insert(0, hardware.load().get("huggingface_token", ""))
+        self.hf_token_entry.grid(row=1, column=0, sticky="ew", padx=12, pady=4)
+        ctk.CTkButton(hf, text="Guardar token", width=115,
+                      command=self._save_hf_token).grid(row=1, column=1, padx=(0, 12), pady=4)
+        ctk.CTkLabel(hf, text="Acepta las condiciones de pyannote Community-1 antes de descargarlo. "
+                     "El audio se procesa en esta PC. El token se guarda solo en la configuración local.",
+                     text_color="gray55", font=ctk.CTkFont(size=11), justify="left",
+                     anchor="w", wraplength=640).grid(row=2, column=0, columnspan=2,
+                                                      sticky="ew", padx=12, pady=(2, 6))
+        def open_model():
+            import webbrowser
+            webbrowser.open("https://huggingface.co/pyannote/speaker-diarization-community-1")
+        ctk.CTkButton(hf, text="Abrir condiciones del modelo", command=open_model).grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=12, pady=(0, 10))
+
         # ---- estado guardado ----
         self.settings_status = ctk.CTkLabel(wrap, text="", text_color="#2fa572",
                                             font=ctk.CTkFont(size=12))
-        self.settings_status.grid(row=8, column=0, sticky="w", padx=10, pady=(0, 8))
+        self.settings_status.grid(row=9, column=0, sticky="w", padx=10, pady=(0, 8))
 
         # cargar valores actuales + poblar detección
         cfg = hardware.load()
@@ -710,7 +732,7 @@ class App(ctk.CTk):
                 row=i, column=1, sticky="w", padx=(16, 0), pady=1)
 
         # ¿hay GPU para el carril CUDA (whisper+torch) y/o para el carril Vulkan (iGPU incluida)?
-        has_cuda = bool(g["ct2_cuda"] or g["torch_cuda"])
+        has_cuda = hardware.cuda_candidate(g)
         has_vulkan_gpu = any(gg["kind"] in ("integrada", "dedicada") for gg in gpus_all)
         if not has_cuda:
             self.gpu_prefer.deselect(); self.gpu_prefer.configure(state="disabled")
@@ -723,7 +745,11 @@ class App(ctk.CTk):
         else:
             self.gpu_prefer.configure(state="normal")
             self._setcb(self.gpu_prefer, hardware.load().get("gpu_prefer", True))
-            if hardware.use_gpu_torch():
+            if os.name == "nt" and (g["torch_cuda"] or g["torch_cuda"] is None):
+                note = ("Whisper puede usar CUDA. La alineación MMS, diarización, arousal y risa usan "
+                        "CUDA en procesos separados para evitar conflictos entre DLLs. Si falta memoria "
+                        "o CUDA falla, la etapa se reintenta en CPU. Los demás modelos usan su backend disponible.")
+            elif hardware.use_gpu_torch():
                 note = ("Con esto marcado, Whisper y todos los modelos de IA (alineación, emoción, risa, "
                         "escenas, respiraciones) corren en la GPU.")
             elif os.name == "nt" and g["torch_cuda"]:
@@ -813,6 +839,7 @@ class App(ctk.CTk):
 
     def _on_whisper_model(self, value):
         hardware.set_(whisper_model=value)
+
         # los selectores de las demás vistas siguen al default (sin tocar una corrida en curso)
         try:
             if not (self.worker and self.worker.is_alive()):
@@ -821,6 +848,10 @@ class App(ctk.CTk):
         except Exception:
             pass
         self._settings_flash(f"Modelo por defecto: {value} ✓")
+
+    def _save_hf_token(self):
+        hardware.set_(huggingface_token=self.hf_token_entry.get().strip())
+        self._settings_flash("Token de Hugging Face guardado en esta PC.")
 
     def _free_memory(self):
         if jobs.busy():                              # no descargar modelos en medio de un job
@@ -902,6 +933,18 @@ class App(ctk.CTk):
             self.cb_align.deselect(); self.cb_align.configure(state="disabled")
             self.cb_align_hint.configure(text="(alineación no disponible: falta torchaudio con MMS)")
 
+        self.cb_diarization = ctk.CTkCheckBox(alf, text="Separar hablantes (diarización local)")
+        self.cb_diarization.grid(row=2, column=0, sticky="w", padx=12, pady=(4, 6))
+        diar_row = ctk.CTkFrame(alf, fg_color="transparent")
+        diar_row.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 10))
+        ctk.CTkLabel(diar_row, text="Hablantes: ").pack(side="left")
+        self.tx_speaker_count = ctk.CTkOptionMenu(diar_row, values=["Auto"] + [str(n) for n in range(1, 9)],
+                                                 width=80)
+        self.tx_speaker_count.set("Auto")
+        self.tx_speaker_count.pack(side="left")
+        ctk.CTkLabel(diar_row, text="  Token de Hugging Face en Ajustes", text_color="gray60",
+                     font=ctk.CTkFont(size=11)).pack(side="left")
+
         df = ctk.CTkFrame(left); df.grid(row=6, column=0, sticky="ew", **pad)
         df.grid_columnconfigure(0, weight=1)
         self.out_entry = ctk.CTkEntry(df, placeholder_text="Carpeta de destino (por defecto: la del audio)")
@@ -946,7 +989,8 @@ class App(ctk.CTk):
         return {"model": self.model_menu.get(), "lang": self.lang_entry.get().strip(),
                 "device": self.dev_seg.get(), "segments": bool(self.cb_seg.get()),
                 "srt": bool(self.cb_srt.get()), "cues": bool(self.cb_cue.get()),
-                "align": bool(self.cb_align.get())}
+                "align": bool(self.cb_align.get()), "diarization": bool(self.cb_diarization.get()),
+                "num_speakers": self.tx_speaker_count.get()}
 
     def _tx_set_cfg(self, c):
         if c.get("model") in core.MODELS:
@@ -961,6 +1005,8 @@ class App(ctk.CTk):
         self._setcb(self.cb_cue, c.get("cues", True))
         if "align" in c and align.available():
             self._setcb(self.cb_align, c["align"])
+        self._setcb(self.cb_diarization, c.get("diarization", False))
+        self.tx_speaker_count.set(str(c.get("num_speakers") or "Auto"))
 
     def _start(self):
         if self.worker and self.worker.is_alive():
@@ -976,7 +1022,9 @@ class App(ctk.CTk):
             lang=self.lang_entry.get().strip() or "es",
             device="cuda" if self.dev_seg.get() == "GPU" else "cpu",
             want_segments=bool(self.cb_seg.get()), want_srt=bool(self.cb_srt.get()),
-            want_cues=bool(self.cb_cue.get()), want_align=bool(self.cb_align.get()))
+            want_cues=bool(self.cb_cue.get()), want_align=bool(self.cb_align.get()),
+            want_diarization=bool(self.cb_diarization.get()),
+            num_speakers=None if self.tx_speaker_count.get() == "Auto" else int(self.tx_speaker_count.get()))
         self.cancel.clear(); self.progress.set(0)
         self.eta_label.configure(text="Preparando…")
         self.run_btn.configure(text="Cancelar")

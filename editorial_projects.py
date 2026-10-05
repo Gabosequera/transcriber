@@ -70,6 +70,13 @@ def derive_master(parent, child_info, child_fp, segments, *, name, parent_path=N
         for collection in ("words", "laughter", "arousal", "emotions", "intensity"):
             track[collection] = _slice(original.get(collection, []), mapping,
                                         "word_id" if collection == "words" else "event_id")
+        if original.get("diarization"):
+            for collection in ("turns", "exclusive_turns"):
+                turns = []
+                for turn in original["diarization"].get(collection, []):
+                    for part in map_range(turn["start"], turn["end"], mapping):
+                        turns.append({**turn, "start": part["t_ini"], "end": part["t_fin"]})
+                track["diarization"][collection] = sorted(turns, key=lambda turn: turn["start"])
         words = track["words"]
         originals = original.get("utterances", [u for u in parent["conversation"]["utterances"]
                                                 if u["track_id"] == track_id])
@@ -119,6 +126,7 @@ def derive_master(parent, child_info, child_fp, segments, *, name, parent_path=N
             "media": {"path": child_info["path"], "duration": child_info["duracion"],
                       "t0": child_info["t0"], "fingerprint": child_fp},
             "transcription": copy.deepcopy(parent.get("transcription", {})), "tracks": tracks,
+            "speakers": copy.deepcopy(parent.get("speakers", {})),
             "conversation": {"utterances": utterances,
                              "clean_utterance_ids": [u["utterance_id"] for u in utterances
                                                      if not u.get("duplicate_secondary")],

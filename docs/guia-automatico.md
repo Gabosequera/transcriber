@@ -16,6 +16,12 @@ decide en el timeline; el video se corta solo al pulsar exportar**.
   puede contener varias personas; sin diarización no se atribuye quién habla.
 - **Master editorial.** `<nombre>.editorial.master.json`: todas las palabras y eventos una
   sola vez, más la conversación global con todas las pistas intercaladas por tiempo.
+- **Conversación para lectura y AI.** `views/conversation.md` agrupa fragmentos consecutivos
+  de un hablante en párrafos, conservando texto, tiempos y referencias originales. No mezcla
+  cambios de hablante, solapes ni pausas largas. `conversation.readable.json` incluye el texto
+  agrupado y todos los IDs originales de cada bloque; `conversation-signals.md` conserva el
+  detalle fragmento por fragmento con señales acústicas. Para elegir contenido, empieza por
+  la conversación legible y devuelve referencias originales o tiempos de los cortes.
 - **Bloques (chunks).** División del podcast en partes de hasta 50 minutos por cambio de
   tema. Los propone una AI externa y se revisan en la app.
 - **Recortes.** Tramos «de aquí a aquí» que se quitarían del video: los propone la
@@ -83,6 +89,30 @@ app pregunta **Retomar con lo ya hecho** o **Empezar de cero (reescribir)**.
 
 Al terminar, **Conversación** abre `views/conversation.md`: todas las pistas intercaladas
 con timecodes e IDs de intervención.
+
+### Varias personas en una pista: diarización local
+
+Whisper transcribe; **pyannote Community-1** identifica quién habla. Para activarlo:
+
+1. Acepta las condiciones de [Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+   con tu cuenta de Hugging Face y crea un [token de lectura](https://huggingface.co/settings/tokens).
+2. En **Ajustes → Diarización local**, pega el token y pulsa **Guardar token**.
+3. Marca **Separar hablantes (diarización)** en el pipeline. En **Hablantes por pista**,
+   deja **Auto** para detectar el número o elige **2** si sabes que son dos personas.
+4. Procesa o reanuda con **Retomar con lo ya hecho**; Whisper y MMS se reutilizan.
+
+La primera vez se descargan los modelos al caché persistente; la inferencia del audio
+es local. El token no se escribe en masters ni manifests del proyecto.
+El master añade un catálogo `speakers`, identifica cada palabra e intervención con
+`speaker_id` (por ejemplo `A-SPEAKER_00`) y divide una frase al cambiar el hablante.
+`tracks.A.diarization` conserva los turnos normales, incluidos solapes, y los turnos
+exclusivos usados para asignar las palabras. Las vistas de conversación y `map.json`
+también identifican a los hablantes. Se mantienen al exportar proyectos derivados.
+
+Las etiquetas son identidades acústicas dentro de cada pista, no nombres reales ni
+identidades compartidas entre pistas. Una palabra sin evidencia cercana queda con
+`speaker_id: null`. La diarización no separa las voces en archivos de audio, y Whisper
+puede omitir palabras si dos personas hablan simultáneamente.
 
 ## 2. Bloques por tema con la AI
 
@@ -601,3 +631,11 @@ estiramiento no llega a tiempo real.
   silencios los trata como voz (no los recorta), así que el resultado es conservador.
 - Los parámetros de silencio (`mín`, `margen`) y el umbral de actividad de 12 dB están
   pensados para ajustarse con material real; revisa el carril antes de cortar.
+# GPU en Windows
+
+Con «Preferir GPU» activado, Whisper usa CUDA y la alineación MMS, diarización,
+arousal y risa ejecutan su inferencia en procesos separados. Esto evita mezclar
+las DLLs cuDNN de Whisper con las de Torch y libera la memoria de cada modelo
+al terminar su etapa. Los lotes de Torch en GPU son conservadores para equipos
+con poca VRAM. Si una etapa falla por memoria o runtime CUDA, se reintenta completa
+en CPU y el registro lo indica. Cancelar también detiene el proceso de inferencia.

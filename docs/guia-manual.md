@@ -34,6 +34,12 @@ gate de bordes, render y revisión del rough cut), `consolidar.py`, `ava.py`, `c
 
 Salidas:
 
+Opcionalmente marca **Separar hablantes (diarización local)** y elige **Auto** o un
+número de hablantes. Configura antes el token de Hugging Face en **Ajustes → Diarización
+local** y acepta las condiciones de Community-1 (ver la [guía de diarización](guia-automatico.md#varias-personas-en-una-pista-diarización-local)).
+`words.json` y `segments.json` incluyen `speaker_id`; las frases se dividen al cambiar
+el hablante. También se genera `<nombre>.diarization.json`, y SRT/cues indican el hablante.
+
 - `<nombre>.words.json` — cada palabra con `start`/`end` en segundos: la fuente de verdad
   para sincronizar.
 - `<nombre>.segments.json` — frases con timestamps.

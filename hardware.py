@@ -61,6 +61,7 @@ _DEFAULTS = {
     # modelo de Whisper por defecto en TODAS las pestañas (Transcribir, Automático, wizard).
     # large-v3-turbo: calidad de large con velocidad muy superior. Se cambia en Ajustes.
     "whisper_model": "large-v3-turbo",
+    "huggingface_token": "",  # local only; never included in masters or run manifests
     # ancho del panel derecho de Automático (se cambia arrastrando el divisor)
     "automatico_panel_width": 292,
     # formato de salida al exportar cortes (clave de podcast_export.FORMATS)
@@ -173,6 +174,12 @@ def gpu_info() -> dict:
     CARO (importa torch y ctranslate2): no llamar en el camino de arranque de la GUI."""
     g = _gpu_nvidia_smi()
     return {**g, "torch_cuda": torch_cuda_available(), "ct2_cuda": ct2_cuda_count()}
+
+
+def cuda_candidate(g: dict) -> bool:
+    """Unknown backends during startup do not negate NVIDIA's driver inventory."""
+    return bool(g.get("ct2_cuda") or g.get("torch_cuda") or
+                (g.get("name") and (g.get("ct2_cuda") is None or g.get("torch_cuda") is None)))
 
 
 def vram_free_gb() -> float | None:
@@ -391,17 +398,16 @@ def gpu_prefer() -> bool:
 
 
 def use_gpu_torch() -> bool:
-    """¿Usar GPU en los módulos torch (align/metadata/risa/escenas/respiros)?
-    = el usuario la prefiere Y torch la ve.
+    """CUDA only in isolated Windows Torch workers, or directly on other platforms.
 
-    EXCEPCIÓN Windows: torch trae su PROPIO cuDNN y CTranslate2 (Whisper) usa el cuDNN de pip
-    (nvidia-cudnn-cu12) que core._preload_cuda_libs deja en el PATH. Al correr torch-GPU DESPUÉS de
-    Whisper, torch carga el cuDNN equivocado → crash nativo ("Could not load symbol cudnnGetLibConfig,
-    error 127"). Hasta resolver ese conflicto de DLLs, en Windows los modelos torch corren en CPU
-    (Whisper sigue en GPU vía CTranslate2 — su carril es independiente). Es el MISMO comportamiento que
-    la laptop Linux de dev (torch era +cpu) → misma precisión. Se puede forzar GPU (experimental) con
-    config `gpu_torch_windows=True`."""
-    if os.name == "nt" and not load().get("gpu_torch_windows", False):
+    The GUI process retains CPU Torch to avoid Whisper's incompatible cuDNN DLLs.
+    MMS, diarization, arousal and laughter dispatch through torch_worker instead.
+    Legacy gpu_torch_windows never bypasses this safety boundary.
+    """
+    worker_device = os.environ.get("TRANSCRIPTOR_TORCH_WORKER_DEVICE")
+    if worker_device is not None:
+        return worker_device == "cuda" and torch_cuda_available()
+    if os.name == "nt":
         return False
     return bool(gpu_prefer() and torch_cuda_available())
 
@@ -487,6 +493,8 @@ def load_model_safe(build, *, log=None):
     try:
         return build(dev), dev
     except Exception as e:                       # noqa: BLE001
+        if os.environ.get("TRANSCRIPTOR_TORCH_WORKER_DEVICE") == "cuda":
+            raise  # parent restarts the entire operation in a clean CPU process
         if dev == "cuda" and is_cuda_oom(e):
             if log:
                 log(f"⚠ GPU sin memoria al cargar el modelo → usando CPU. ({type(e).__name__})")

@@ -18,20 +18,26 @@
 ctranslate2==4.8.1
 customtkinter==6.0.0
 faster-whisper==1.2.1
+av==18.1.0                     # faster-whisper 1.2.1 usa metadata_errors, eliminado en PyAV 19
 numpy==2.4.6
 nvidia-cublas-cu12==12.9.2.10     # para Whisper en GPU (CTranslate2) - wheel de Windows
 nvidia-cudnn-cu12==9.24.0.43      #   idem
 silero-vad==6.2.1
+pyannote.audio==4.0.4            # diarización local Community-1
+torchcodec==0.7.0               # compatible con Torch 2.8 / Python 3.13
+torch==2.8.0                    # evita upgrades transitivos que eliminan forced_align
+torchaudio==2.8.0
 soundfile==0.14.0
 psutil==7.2.2                     # deteccion de hardware (pestana Ajustes)
 librosa==0.11.0
 intervaltree==3.2.1
 transformers>=4.48,<5             # <5 obligatorio: el modelo de audeering rompe con 5.x
 pysentimiento==0.7.3
+datasets==5.0.1                # evita datasets 2.x incompatible con PyArrow moderno
 pydub==0.25.1
 
-# torch / torchaudio: NO se ponen aca - se instalan en el PASO 1 con el indice
-# CUDA (arriba), para no fijar una version que no matchee el indice del sistema.
+# Torch se instala primero desde el indice CUDA; los pins anteriores preservan
+# esa version al resolver las dependencias transitivas de pyannote.
 
 # --- modalidad de VIDEO (cara / facecam) ---
 mediapipe                 # Face Landmarker; runtime propio (tflite) -> no choca con torch/cuDNN

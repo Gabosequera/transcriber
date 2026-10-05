@@ -8,7 +8,11 @@
 4. Abre la aplicación con `run.bat`.
 
 No hace falta instalar Python, Git, ffmpeg ni permisos de administrador. El instalador
-descarga `uv`, crea un Python bootstrap pequeño y prepara el runtime de procesamiento.
+descarga `uv` y Python oficial firmado por Python Software Foundation, crea un bootstrap
+pequeño y prepara el runtime de procesamiento. Python queda en `shared\python`;
+no modifica el PATH ni desactiva Smart App Control. Si Windows muestra el error 4551
+con una instalación anterior basada en Python de `uv`, vuelve a ejecutar
+`setup-windows.bat`: repara los entornos conservando paquetes y modelos.
 
 ## Layout administrado
 
@@ -23,6 +27,7 @@ Transcriptor\
 │   ├── config\              configuración y presets por máquina
 │   ├── llama\               binarios de llama.cpp
 │   ├── models\              GGUF y MediaPipe
+│   ├── python\              Python oficial firmado y Tkinter
 │   └── tools\               uv y ffmpeg
 ├── state\current.json       release activa, anterior y estado de salud
 └── run.bat

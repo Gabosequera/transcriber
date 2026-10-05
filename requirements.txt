@@ -2,10 +2,13 @@
 ctranslate2==4.8.1
 customtkinter==6.0.0
 faster-whisper==1.2.1
+av==18.1.0                     # metadata_errors sigue disponible para faster-whisper 1.2.1
 numpy==2.4.6
 nvidia-cublas-cu12==12.9.2.10
 nvidia-cudnn-cu12==9.24.0.43
 silero-vad==6.2.1
+pyannote.audio==4.0.4
+torchcodec==0.7.0
 soundfile==0.14.0
 psutil==7.2.2             # detección de hardware (RAM/CPU) para la pestaña Ajustes
 torch==2.8.0+cpu
@@ -19,6 +22,7 @@ intervaltree==3.2.1
 # pestaña Metadata (emoción): arousal del audio (audeering) + valence del texto (pysentimiento)
 transformers>=4.48,<5     # IMPORTANTE <5: el modelo custom de audeering rompe con transformers 5.x
 pysentimiento==0.7.3
+datasets==5.0.1
 # pestaña Metadata (risa): omine-me/LaughterSegmentation — wav2vec2 vía transformers (ya arriba)
 pydub==0.25.1             # preproceso del detector de risa
 # además clonar el repo del detector de risa (el modelo se baja solo de HF la 1ª vez, ~1.26GB):

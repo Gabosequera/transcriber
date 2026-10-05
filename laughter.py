@@ -28,6 +28,7 @@ import sys
 import numpy as np
 
 import app_paths
+from torch_worker import isolated
 
 REPO = str(app_paths.LAUGHTER_REPO)
 BASE = "jonatasgrosman/wav2vec2-large-xlsr-53-english"
@@ -108,6 +109,7 @@ def _amplitude_boost(array, sr, mul_fac=5):
     return librosa.util.normalize(out)
 
 
+@isolated
 def detect(audio, *, threshold=0.5, amplitude_boost=True, min_dur=0.2, merge_gap=0.2,
            input_sec=7, overlap_sec=2.0, batch_size=10, log_cb=None, progress_cb=None,
            cancel=None) -> list[dict]:

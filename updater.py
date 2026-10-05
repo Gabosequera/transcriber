@@ -561,7 +561,12 @@ def ensure_runtime(root: Path, manifest: dict, release_dir: Path,
             raise UpdateError(f"falló {label} (código {process.returncode})")
 
     try:
-        run([str(uv), "venv", "--python", str(runtime.get("python", "3.13")), str(staging)],
+        # Reutilizar el Python firmado del bootstrap y los redirectores de CPython.
+        # uv venv puede elegir un build/trampoline sin firma bloqueado por Windows.
+        base_python = root / "shared" / "python" / "python.exe"
+        if not base_python.is_file():
+            base_python = Path(sys._base_executable)
+        run([str(base_python), "-m", "venv", "--without-pip", str(staging)],
             "Creando runtime nuevo")
         python = _runtime_python(staging)
         torch = runtime.get("torch") or {}
