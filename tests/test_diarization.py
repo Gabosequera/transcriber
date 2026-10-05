@@ -105,7 +105,8 @@ class PipelineTests(unittest.TestCase):
         whisper_model.transcribe.return_value = ([segment], SimpleNamespace(
             duration=4, language="es", language_probability=1.0))
         with tempfile.TemporaryDirectory() as temporary, \
-                mock.patch("faster_whisper.WhisperModel", return_value=whisper_model), \
+                mock.patch.dict("sys.modules", {"faster_whisper": SimpleNamespace(
+                    WhisperModel=mock.Mock(return_value=whisper_model))}), \
                 mock.patch("core.resolve_device", return_value="cpu"), \
                 mock.patch("diarization.check_access"), \
                 mock.patch("diarization.detect", return_value=sample_document()):
@@ -120,8 +121,9 @@ class PipelineTests(unittest.TestCase):
     def test_missing_hugging_face_access_fails_before_transcription(self):
         with mock.patch.dict("os.environ", {"HF_TOKEN": ""}), \
                 mock.patch("hardware.load", return_value={}), \
-                mock.patch("huggingface_hub.get_token", return_value=None), \
-                mock.patch("huggingface_hub.try_to_load_from_cache", return_value=None), \
+                mock.patch.dict("sys.modules", {"huggingface_hub": SimpleNamespace(
+                    get_token=mock.Mock(return_value=None),
+                    try_to_load_from_cache=mock.Mock(return_value=None))}), \
                 mock.patch("diarization.available", return_value=True):
             with self.assertRaisesRegex(RuntimeError, "Configura el token"):
                 editorial_pipeline._preflight({"diarization": True})
